@@ -1,0 +1,617 @@
+open BHDL_syntax
+open Format
+
+open Gen_vhdl_aux
+
+let ram_inference = Gen_vhdl_aux.ram_inference
+let memory_initialization = Gen_vhdl_aux.memory_initialization
+let intel_max10_target = Gen_vhdl_aux.intel_max10_target
+let intel_xilinx_target = Gen_vhdl_aux.intel_xilinx_target
+let single_read_write_lock_flag = Gen_vhdl_aux.single_read_write_lock_flag
+
+
+(** code generator for statements *)
+let rec pp_s ~genv ~st fmt = function
+| S_skip -> ()
+| S_continue(id,q) -> fprintf fmt "%a := %a;" pp_ident ("state_"^id) pp_state q
+| S_if(z,s1,so) ->
+    fprintf fmt "@[<v 2>if %a(0) = '1' then@,%a@]" pp_ident z (pp_s ~genv ~st) s1;
+    Option.iter (fun s2 -> fprintf fmt "@,@[<v 2>else@,%a@]" (pp_s ~genv ~st) s2) so;
+     fprintf fmt "@,end if;"
+| S_case(y,hs,so) ->
+    (match hs,so with 
+    | [(_,s)], (None|Some S_skip) -> (* optimization *)
+        pp_s ~genv ~st fmt s
+    | _ ->
+      fprintf fmt "@[<v>case %a is@," pp_ident y;
+      let pp_cs fmt cs = 
+        pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt " | ")
+          pp_c fmt cs
+      in
+      List.iter (fun (cs,s) ->
+        fprintf fmt "@[<v 2>when %a =>@,%a@]@," pp_cs cs (pp_s ~genv ~st) s) hs;
+      Option.iter (fun s ->
+        fprintf fmt "@[<v 2>when others =>@,%a@]@," (pp_s ~genv ~st) s) so;
+      fprintf fmt "@]end case;")
+| S_set(x,a) -> fprintf fmt "@[<v>%a := %a;@]" pp_ident x (pp_a ~genv) a
+| S_sig_set(x,a) -> fprintf fmt "@[<v>%a <= %a;@]" pp_ident x (pp_a ~genv) a
+| S_acquire_lock(l) ->
+      fprintf fmt
+         "@[Lock.acquire(%a);@]" 
+            pp_ident (ptr_taken l)
+ | S_release_lock l ->
+      fprintf fmt
+         "@[Lock.release(%a);@]" 
+            pp_ident (ptr_taken l)
+| S_read_start(x,idx) -> (* todo: avoid code duplication between S_setptr & S_setptr_write *)
+   fprintf fmt "@[%a <= " pp_ident ("$"^x^"_ptr");
+   (match idx with
+    | A_const(Int{value=n}) ->
+       fprintf fmt
+         "%d" n
+    | _ ->
+       fprintf fmt
+         "to_integer(unsigned(%a))" (pp_a ~genv) idx);
+   fprintf fmt ";@]"
+| S_read_stop(x,l) ->
+        fprintf fmt
+         "@[%a := %a;@]" 
+            pp_ident x
+            pp_ident ("$"^l^"_value") 
+  | S_write_start(x,idx,a) ->
+     fprintf fmt "@[%a <= " pp_ident ("$"^x^"_ptr_write");
+     (match idx with
+      | A_const(Int{value=n}) ->
+         fprintf fmt
+           "%d" n
+      | _ ->
+         fprintf fmt
+           "to_integer(unsigned(%a))" (pp_a ~genv) idx);
+      fprintf fmt ";@]";
+      fprintf fmt
+        "@[%a <= %a; %a <= '1';@]" 
+          pp_ident ("$"^x^"_write")
+          (pp_a ~genv) a
+          pp_ident ("$"^x^"_write_request")
+    | S_write_stop(x) ->
+        fprintf fmt
+         "@[%a <= '0';@]" 
+              pp_ident ("$"^x^"_write_request")
+| S_seq(S_skip,s) | S_seq(s,S_skip) ->
+    pp_s ~genv ~st fmt s
+| S_seq(s1,s2) ->
+    fprintf fmt "@[<v>%a@,%a@]" 
+      (pp_s ~genv ~st) s1 
+      (pp_s ~genv ~st) s2
+| S_letIn(x,a,s) ->
+    fprintf fmt "@[<v>%a := %a;@,%a@]"
+      pp_ident x 
+      (pp_a ~genv) a 
+      (pp_s ~genv ~st) s
+| S_fsm(id,rdy,x,cp,ts,s) ->
+     let (st2,_,_) = List.assoc id !List_machines.extra_machines in
+     pp_fsm ~genv fmt
+        ~state_var:(st2) (*"state_"^id*) ~idle:cp ~rdy (id,ts,s)
+| S_in_fsm(id,s) ->
+     let (st2,_,_) = List.assoc id !List_machines.extra_machines in
+     pp_s ~genv ~st:st2 fmt s
+| S_array_set(x,y,a) ->
+    fprintf fmt "@[%a(to_integer(unsigned(%a&\"000\"))) := %a;@]"
+      pp_ident x
+      pp_ident y
+      (pp_a ~genv) a
+| S_array_from_file(y,a) ->
+    if !Operators.flag_no_print then () else (
+    fprintf fmt "@[%a := %a;@,%a := %a;@,@]"
+        pp_ident ("$"^y^"_from_file") (pp_a ~genv) (A_const (Bool true))
+        pp_ident ("$"^y^"_file_name") (pp_a ~genv) a)
+| S_call(op,a) ->
+   fprintf fmt "%a;@," (pp_call ~genv) (Runtime(op),a)
+| S_external_run(f,l,res,rdy,a) ->
+   fprintf fmt "%a := %s_result_%a(0 to %s_result_%a'length - 2);@,"
+          pp_ident res
+          f pp_ident l
+          f pp_ident l;
+   fprintf fmt "%a := %s_result_%a(%s_result_%a'length - 1 to %s_result_%a'length - 1);@,"
+          pp_ident rdy
+          f pp_ident l 
+          f pp_ident l 
+          f pp_ident l;
+   fprintf fmt "%s_argument_%a_var := \"1\" & %a;@,"
+          f pp_ident l
+          (pp_a ~genv) a
+| S_assert(a,loc) ->
+   fprintf fmt "-- ===================================@,";
+   fprintf fmt "assert %a = \"1\" report \"from %a\" severity error;@,"
+        (pp_a ~genv) a Prelude.Errors.pp_loc loc;
+   fprintf fmt "-- ===================================@,"
+
+| S_record_update(xdst,xsrc,y,a,t) ->
+     (match t with
+     | TRecord b_list ->
+         let k,k' = let rec loop n = function
+                    | [] -> assert false
+                    | (y',ty')::bs' ->
+                        if y' = y then n,n+size_ty ty' else
+                        loop (n+size_ty ty') bs'
+                    in loop 0 b_list
+         in
+         fprintf fmt  "%a := %a;@,%a(%d to %d) := %a;@," 
+            pp_ident xdst pp_ident xsrc pp_ident xdst k (k'-1) (pp_a ~genv) a
+     | _ -> assert false)
+
+(** code generator for FSMs *)
+and pp_fsm ~genv fmt ~state_var:st ~idle ~rdy (state_var,ts,s) =
+  match ts with 
+  | [] -> (* optimization *)
+      fprintf fmt "@[<v> -- case %a is when %a =>@," pp_ident st (* state_var*) pp_state idle;
+      pp_s ~genv ~st fmt s;
+      fprintf fmt "@,-- end case;@,@]"
+  | _ ->
+      fprintf fmt "@[<v>case %a is@," pp_ident st (* state_var*);
+      List.iter (fun (x,s) ->
+          fprintf fmt "@[<v 2>when %a =>@,%a@]@," 
+            pp_state x 
+            (pp_s ~genv ~st) 
+            s) ts;
+      fprintf fmt "@[<v 2>when %a =>@,%a@]@," 
+        pp_state idle 
+        (pp_s ~genv ~st) s;
+      fprintf fmt "@]end case;@,"
+
+(* default value as bitvector where each bit is at '0' *)
+let default_zero_value nbits =
+  "(others => '0')"
+
+(* default value according to the given type. *)
+let default_zero t =
+  match BHDL_typing.canon t with
+  | TStatic{size=TTuple ts} -> 
+     (* dead code (used for implementing experimental matrices) 
+        to be deleted *)
+     let rec aux ts =
+       match ts with
+       | [] -> "'0'"
+       | _::ts' -> "(others => "^aux ts'^")"
+      in aux ts
+  | TStatic{size=t} -> "(others => (others => '0'))"
+  | _ -> "(others => '0')"
+
+let declare_state_var fmt state_var idle xs =
+  let state_var_tname = Naming_convention.state_var_type state_var in
+    fprintf fmt "type %a is (%a" pp_ident state_var_tname pp_state idle;
+
+    List.iter (fun x -> fprintf fmt ", %a" pp_state x) xs;
+
+    fprintf fmt ");@,signal %a, %a: %a;@," pp_ident (state_var^"%now") pp_ident (state_var^"%next") pp_ident state_var_tname
+
+
+
+let declare_machine fmt ~state_var ~idle ~infos (ts,s) =
+
+  declare_state_var fmt state_var idle (List.map fst ts);
+
+  List.iter (fun (_,(sv,cp,xs)) -> declare_state_var fmt sv cp xs) !List_machines.extra_machines;
+
+  Gen_BHDL.SMap.iter (fun x w ->
+    let inst_tname = Naming_convention.instances_type x in
+    let sq = Gen_BHDL.IMap.to_seq w in
+    let l = (List.of_seq sq) in
+    begin
+      fprintf fmt "type %a is (" pp_ident inst_tname ;
+      pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt ", ")
+        (fun fmt (n,_) -> fprintf fmt "%a" pp_ident (Naming_convention.instance_enum_const n)) fmt l;
+      fprintf fmt ");@,";
+      fprintf fmt "signal %a : %a;@," pp_ident (Naming_convention.instance_id_of_fun x) pp_ident inst_tname
+    end
+  ) infos
+(* type array_value is array (0 to 20) of Values.t(0 to 31); *)
+let pp_ty fmt t =
+  match BHDL_typing.canon t with
+  | TStatic{elem;size=TTuple ts} -> 
+      fprintf fmt "array_value_%d" (size_ty elem);
+      List.iter (fun tsize -> fprintf fmt "(0 to %d)" (size_ty tsize - 1)) ts;
+  | TStatic{elem;size} -> fprintf fmt "array_value_%d(0 to %d)" (size_ty elem) (size_ty size - 1);
+  | _ ->
+      fprintf fmt "Values.t(0 to %d)" (size_ty t-1)
+
+let declare_signals others variables fmt =
+  let var_decls = Hashtbl.create 10 in
+  let add_var x n =
+    match Hashtbl.find_opt var_decls n with
+    | None -> Hashtbl.add var_decls n [x]
+    | Some s -> Hashtbl.replace var_decls n (x::s)
+  in
+  List.iter (fun (x,t) ->
+      let n = (size_ty t) in
+      if (match t with TSig _ -> false | _ -> true)
+      then (add_var ((x^"%now")) n;
+            add_var ((x^"%next")) n) else add_var x n
+    ) variables;
+  List.iter (fun (x,t) ->
+      let n = (size_ty t) in
+      add_var x n) others;
+  Hashtbl.iter (fun n xs ->
+      fprintf fmt "signal @[<v>@[<hov>%a@] : Values.t(0 to %d) := (others => '0');@]@,"
+        (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt ",@ @,") pp_ident) xs (n-1)
+    ) var_decls
+
+
+
+let declare_variable ~argument ~statics typing_env fmt =
+  let var_decls = Hashtbl.create 10 in
+  let add_var x n =
+    match Hashtbl.find_opt var_decls n with
+    | None -> Hashtbl.add var_decls n [x]
+    | Some s -> Hashtbl.replace var_decls n (x::s)
+  in
+  Hashtbl.iter (fun x t ->
+      if (match t with TSig _ -> false | _ -> true)
+         && x <> argument && not (List.mem_assoc x statics) then
+          add_var x (size_ty t)
+    ) typing_env;
+
+  Hashtbl.iter (fun n xs ->
+      (* Notice there is a default value ``0'' *)
+      fprintf fmt "variable @[<v>@[<hov>%a@] : Values.t(0 to %d) := (others => '0');@]@,"
+        (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt ",@ @,") pp_ident) xs (n-1)
+    ) var_decls
+
+
+(* code generator for the whole design *)
+let pp_component fmt ~registers ~vhdl_comment ~name ~genv ~state_var ~argument ~result ~idle ~rdy ~statics typing_env infos (ts,s) =
+   
+  let arty = List.fold_left (fun arty (_,g) ->
+      match g with
+      | Static_array_of ty -> 
+          (match BHDL_typing.canon ty with
+          | TStatic{elem} ->  ArrayType.add (size_ty elem) () arty
+          | _ -> Debug.pp_ty Format.std_formatter ty;  assert false)
+      | Static_array(c,_) -> ArrayType.add (size_const c) () arty
+    ) ArrayType.empty statics
+  in
+
+  Gen_BHDL.SMap.iter (fun x _ -> Hashtbl.remove typing_env x;
+                       Hashtbl.remove typing_env (Naming_convention.instance_id_of_fun x)) infos;
+
+  fprintf fmt "@[<v>%s@]" vhdl_comment;
+  fprintf fmt "@[<v>library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+use work.all;
+
+@[<v 2>entity %a is@," pp_ident name;
+
+  let t_argument = Hashtbl.find_opt typing_env argument in
+  let t_result = Hashtbl.find_opt typing_env result in
+  if t_argument = None || t_result = None then
+    (fprintf fmt "generic(@[<v>";
+     if t_argument = None then fprintf fmt "argument_width : natural := 1";
+     if t_argument = None && t_result = None then fprintf fmt ";@,";
+     if t_result = None then fprintf fmt "  result_width : natural := 1@,";
+     fprintf fmt ");@]");
+  fprintf fmt "@,port(@[<v>signal clk    : in std_logic;@,";
+  fprintf fmt "signal reset  : in std_logic;@,";
+  (* fprintf fmt "signal rdy    : out Values.t(0 to 0);@,"; *)
+  let st_argument = match t_argument with None -> "argument_width - 1" | Some t -> string_of_int (size_ty t - 1) in
+  let st_result = match t_result with None -> "result_width - 1" | Some t -> string_of_int (size_ty t - 1) in
+  fprintf fmt "signal %s : in Values.t(0 to %s);@," argument st_argument;
+  fprintf fmt "signal result : out Values.t(0 to %s)" st_result;
+  fprintf fmt ");@,@]@]@,end entity;
+architecture rtl of %a is@,@[<v 2>@," pp_ident name;
+
+  if !intel_xilinx_target then ( (* attribute for enforcing RAM inference in Xilinx Vivado *)
+    fprintf fmt "attribute ram_style : string;@,"
+  );
+  if !has_init_file_ram <> [] then ( (* attribute for enforcing RAM inference in Xilinx Vivado *)
+    fprintf fmt "attribute ram_init_file : string;@,"
+  );
+
+  declare_machine fmt ~state_var ~idle ~infos (ts,s);
+
+  ArrayType.iter (fun n _ ->
+      fprintf fmt "type array_value_%d is array (natural range <>) of Values.t(0 to %d);@," n (n-1)) arty;
+
+  if !Operators.flag_no_print || 
+    Hashtbl.length BHDL_typing.hashtbl_array_from_file = 0 
+  then () else (
+  ArrayType.iter (fun n _ ->
+      fprintf fmt 
+"@,@,procedure array_from_file(signal x : inout array_value_%d; name : in std_logic_vector) is
+    type char_file_t is file of character;
+    file infile : char_file_t;
+    variable c: character;
+    variable i : integer := 0;
+    variable tmp : std_logic_vector(0 to ((%d+7)/8)*8-1) := (others => '0');
+  begin        
+    file_open(infile, work.IOFile.to_string(name), read_mode);
+    while not endfile (infile) and i < x'length loop
+      for k in 0 to tmp'length/8 - 1 loop
+        read(infile, c);
+        tmp(k*8 to k*8+7) := std_logic_vector(to_unsigned(Character'pos(c),8));
+      end loop;
+      x(i) <= tmp(0 to %d-1);
+      i := i + 1;
+    end loop;
+    file_close(infile);
+    for j in i to x'length-1 loop
+      x(j) <= (others => '0');
+    end loop;
+  end;@,@," n n n) arty);
+
+
+  List.iter (fun (x,st) ->
+    match st with
+   
+    | Static_array_of ty ->
+          let ty_elem,sz = match BHDL_typing.canon ty with
+                          | TStatic {elem;size=sz} -> elem,sz
+                          | _ -> assert false (* error *) in
+          let n = match BHDL_typing.canon sz with
+                  | TSize n -> n
+                  | _ ->  Prelude.Errors.error (fun fmt -> 
+                            Format.fprintf fmt "unspecified size for array %s" x) in
+          let sz_elem = size_ty ty_elem in 
+          array_decl fmt x sz_elem n ((fun fmt () -> fprintf fmt "%s" (default_zero ty_elem)))
+         
+    | Static_array(c,n) ->
+          array_decl fmt x (size_const c) n (fun fmt () -> pp_c fmt c)
+
+    ) statics;
+
+
+  List.iter (print_external fmt) Ast.(genv.externals);
+
+  let variables = List.filter (fun (x,t) -> 
+          (match t with TSig _ -> false | _ -> true) &&
+          x <> argument && not (List.mem_assoc x statics) 
+          && not (List.mem_assoc x Ast.(genv.externals))
+          && not (Ast.SMap.mem x Ast.(genv.operators))
+  )
+    @@ List.of_seq (Hashtbl.to_seq typing_env) in
+  
+  let others = List.of_seq (Hashtbl.to_seq typing_env) |> 
+               List.filter (fun (x,t) -> (match t with TSig _ -> true | _ -> false)) in
+
+  let variables_registers, variables_not_registers = 
+    List.partition (fun (x,_) -> Ast.SMap.mem x registers) variables in
+
+  declare_signals others variables_registers fmt;
+
+  fprintf fmt "@,@[<v 2>begin@,";
+
+  (* instantiate externals *)
+  List.iter (instantiate_external fmt) Ast.(genv.externals);
+
+  List.iter (fun (x,st) ->
+    match st with
+    | Static_array_of _
+    | Static_array _ ->
+      fprintf fmt "process (clk)
+            begin
+            if rising_edge(clk) then
+                 if %a = '1' then
+                    %a(%a) <= %a;%a
+                 end if;
+                 %a <= %a(%a);
+            end if;
+        end process;@,@,"
+          pp_ident ("$"^x^"_write_request")
+          pp_ident x
+          pp_ident ("$"^x^"_ptr_write")
+          pp_ident ("$"^x^"_write")
+          (fun fmt () -> 
+              if !Operators.flag_no_print ||
+                not(Hashtbl.mem BHDL_typing.hashtbl_array_from_file x) 
+                then () else (
+                fprintf fmt "@,             elsif %a(0) = '1' then@,               array_from_file(%a,%a);" 
+                            pp_ident ("$"^x^"_from_file%next")
+                            pp_ident x
+                            pp_ident ("$"^x^"_file_name%next"))) ()
+          pp_ident ("$"^x^"_value")
+          pp_ident x
+          pp_ident ("$"^x^"_ptr");
+
+    ) statics;
+
+  fprintf fmt "@[<v 2>process (reset,clk)@,";
+  fprintf fmt "begin@,";
+  fprintf fmt "@[<v 2>if reset = '1' then@,";
+
+  begin
+    let pp fmt (x,t) =
+      fprintf fmt "%a <= %s;" pp_ident (x^"%now") (default_zero t);
+    in
+    pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "@,")
+       pp fmt variables_registers
+  end;
+     
+  fprintf fmt "@,%a <= %a;" 
+    pp_ident (state_var^"%now") 
+    pp_state idle;
+  begin
+    let pp fmt (_,(sv,idle_sv,xs)) =
+      fprintf fmt "@,%a <= %a;" pp_ident (sv^"%now") pp_state idle_sv
+    in 
+    List.iter (pp fmt)  !List_machines.extra_machines
+  end;
+
+  fprintf fmt "@]@,@[<v 2>elsif (rising_edge(clk)) then@,";
+
+  begin
+    let update fmt (x,_) =
+      fprintf fmt "%a <= %a;" 
+         pp_ident (x^"%now") 
+         pp_ident (x^"%next")
+    in
+    pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "@,")
+       update fmt variables_registers;
+  end;
+
+  begin
+    let update fmt (_,(sv,cp,xs)) =
+      fprintf fmt "@,%a <= %a;" 
+        pp_ident (sv^"%now") 
+        pp_ident (sv^"%next")
+
+    in
+    List.iter (update fmt) !List_machines.extra_machines
+  end;
+ 
+ fprintf fmt "@,%a <= %a;" 
+       pp_ident (state_var^"%now")
+       pp_ident (state_var^"%next");
+
+  List.iter (fun (x,st) ->
+    match st with
+    | Static_array_of _
+    | Static_array _ ->
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_write_request%pre") pp_ident ("$"^x^"_write_request");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_ptr_write%pre") pp_ident ("$"^x^"_ptr_write");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_ptr%pre") pp_ident ("$"^x^"_ptr");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_write%pre") pp_ident ("$"^x^"_write")
+    ) statics;
+
+
+  fprintf fmt "@]@,end if;
+    end process;@,@,@]";
+
+
+  fprintf fmt "@[<v 2>process(%a,%a" pp_ident argument pp_ident (state_var^"%now");
+  if !Operators.flag_no_print then () else fprintf fmt ", clk";
+  List.iter (fun (_,(sv,_,_)) -> fprintf fmt ",%a" pp_ident (sv^"%now")) !List_machines.extra_machines;
+
+  List.iter (fun (x,(Static_array_of _ | Static_array _)) ->
+      fprintf fmt ", %a" pp_ident ("$"^x^"_value");
+      fprintf fmt ", %a" pp_ident ("$"^x^"_write_request%pre");
+      fprintf fmt ", %a" pp_ident ("$"^x^"_ptr_write%pre");
+      fprintf fmt ", %a" pp_ident ("$"^x^"_ptr%pre");
+      fprintf fmt ", %a" pp_ident ("$"^x^"_write%pre")
+  ) statics;
+
+  List.iter (fun (x,_) -> fprintf fmt ", %a" pp_ident (x^"%now")) variables_registers;
+
+  List.iter (fun (x,_) -> fprintf fmt ", %a" pp_ident x) others;
+
+  (* *************** *)
+  let sensibility_external fmt (n,(_,shared,_)) =    
+    let instances = match Hashtbl.find_opt Count_externals.external_count n with
+                    | None ->  Count_externals.SMap.empty
+                    | Some v -> v in
+      Count_externals.SMap.iter (fun l () ->
+        fprintf fmt ", %s_result_%a" n pp_ident l
+      ) instances
+    in    
+    List.iter (sensibility_external fmt) Ast.(genv.externals);
+    (* ***************** *)
+
+  fprintf fmt ")@,";
+
+  declare_variable ~argument ~statics typing_env fmt;
+
+  fprintf fmt "variable %a : %a;@," pp_ident state_var pp_ident (Naming_convention.state_var_type state_var);
+
+  List.iter (fun (_,(sv,_,_)) ->
+     fprintf fmt "variable %a : %a;@," pp_ident sv pp_ident (Naming_convention.state_var_type sv);
+  ) !List_machines.extra_machines;
+
+  (*List.iter (fun (x,(Static_array_of _ | Static_array _)) ->
+      decl_locks fmt x
+  ) statics;
+  List.iter (fun (x,(_,shared)) ->
+      if shared then decl_locks fmt x
+  ) (fst externals);*)
+
+  List.iter (variable_decl_go_external fmt) Ast.(genv.externals);
+
+  
+
+  fprintf fmt "@]@,@[<v 2>begin@,";
+
+  begin
+    let update fmt (x,_) = 
+      if Ast.SMap.mem x !BHDL_typing.global_sigs  then () else
+      fprintf fmt "%a <= (others => '0');@," pp_ident x
+    in
+    pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "@,")
+       update fmt others;
+  end;
+
+  List.iter (fun (x,st) ->
+    match st with
+    | Static_array_of _
+    | Static_array _ ->
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_write_request") pp_ident ("$"^x^"_write_request%pre");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_ptr_write") pp_ident ("$"^x^"_ptr_write%pre");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_ptr") pp_ident ("$"^x^"_ptr%pre");
+        fprintf fmt "%a <= %a;@," pp_ident ("$"^x^"_write") pp_ident ("$"^x^"_write%pre")
+    ) statics;
+
+  List.iter (variable_init_go_external fmt) Ast.(genv.externals);
+
+  
+  (* fprintf fmt "@,@[<v 2>if rising_edge(clk) then@,";
+
+  fprintf fmt "@[<v 2>if (reset = '1') then@,";*)
+
+
+  List.iter (fun (x,_) ->
+     fprintf fmt "%a := %a;@," pp_ident x pp_ident (x^"%now");
+  ) variables_registers;
+  
+  fprintf fmt "%a := %a;@," pp_ident state_var pp_ident (state_var^"%now");
+
+  List.iter (fun (_,(sv,_,_)) ->
+     fprintf fmt "%a := %a;@," pp_ident sv pp_ident (sv^"%now");
+  ) !List_machines.extra_machines;
+
+  
+  if !Operators.flag_no_print then () else (
+      List.iter (fun (x,st) ->
+        if Hashtbl.mem BHDL_typing.hashtbl_array_from_file x then
+    match st with
+    | Static_array_of _
+    | Static_array _ ->
+        fprintf fmt "@[%a := %a;@,@]" (* avoid reading at each clock tick *)
+        pp_ident ("$"^x^"_from_file") (pp_a ~genv) (A_const (Bool false))
+    ) statics
+  );
+  
+
+  (* fprintf fmt "@,rdy <= \"1\";"; 
+  fprintf fmt "@,%a := \"0\";@," pp_ident rdy;*)
+  (* fprintf fmt "%a <= %a;@," pp_ident state_var pp_ident idle; *)
+
+(*  List.iter (fun (_,(sv,cp,xs)) -> fprintf fmt "%a <= %a;@," pp_ident sv pp_ident cp) !List_machines.extra_machines;
+*)
+
+  pp_fsm ~genv fmt ~state_var ~idle ~rdy (state_var,ts,s);
+
+  fprintf fmt "%a <= %a;@," pp_ident (state_var^"%next") pp_ident state_var;
+  
+  List.iter (fun (_,(sv,_,_)) ->
+     fprintf fmt "%a <= %a;@," pp_ident (sv^"%next") pp_ident sv;
+  ) !List_machines.extra_machines;
+
+  List.iter (fun (x,_) ->
+     fprintf fmt "%a <= %a;@," pp_ident (x^"%next") pp_ident x;
+  ) variables_registers;
+
+  fprintf fmt "@,@,result <= %a;@," pp_ident result;
+  (* fprintf fmt "rdy <= %a;@," pp_ident rdy; *)
+
+
+  List.iter (variable_set_go_external fmt) Ast.(genv.externals);
+
+  fprintf fmt
+    "end process;@,";
+  Ast.SMap.iter (fun x y -> 
+     fprintf fmt "%a <= %a;@,@,"  pp_ident x pp_ident y 
+  ) !BHDL_typing.global_sigs;
+  
+  fprintf fmt
+    "
+  end architecture;@]\n";
+
+  ( (argument,t_argument), (result,t_result) )

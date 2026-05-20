@@ -1,0 +1,821 @@
+src/BHDL/BHDL_syntax.cmo : \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/syntax/ast_pprint.cmo
+src/BHDL/BHDL_syntax.cmx : \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/syntax/ast_pprint.cmx
+src/BHDL/BHDL_typing.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/typing/size_limits.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/frontend/fix_int_lit_size.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/BHDL_typing.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/typing/size_limits.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/frontend/fix_int_lit_size.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/compile/flat_let_atom.cmo : \
+    src/BHDL/BHDL_syntax.cmo
+src/BHDL/compile/flat_let_atom.cmx : \
+    src/BHDL/BHDL_syntax.cmx
+src/BHDL/compile/gen_top/gen_top.cmo : \
+    src/prelude.cmo \
+    src/BHDL/BHDL_typing.cmo
+src/BHDL/compile/gen_top/gen_top.cmx : \
+    src/prelude.cmx \
+    src/BHDL/BHDL_typing.cmx
+src/BHDL/compile/gen_vhdl.cmo : \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/compile/backend/naming_convention.cmo \
+    src/BHDL/compile/list_machines.cmo \
+    src/BHDL/compile/gen_vhdl_aux.cmo \
+    src/Eclat/compile/backend/gen_BHDL.cmo \
+    src/BHDL/count_externals.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/compile/gen_vhdl.cmx : \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/compile/backend/naming_convention.cmx \
+    src/BHDL/compile/list_machines.cmx \
+    src/BHDL/compile/gen_vhdl_aux.cmx \
+    src/Eclat/compile/backend/gen_BHDL.cmx \
+    src/BHDL/count_externals.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/compile/gen_vhdl_aux.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/BHDL/count_externals.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/compile/gen_vhdl_aux.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/BHDL/count_externals.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/compile/list_machines.cmo : \
+    src/BHDL/BHDL_syntax.cmo
+src/BHDL/compile/list_machines.cmx : \
+    src/BHDL/BHDL_syntax.cmx
+src/BHDL/count_externals.cmo : \
+    src/BHDL/BHDL_syntax.cmo
+src/BHDL/count_externals.cmx : \
+    src/BHDL/BHDL_syntax.cmx
+src/BHDL/optim/BHDL_propagation.cmo : \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/optim/BHDL_propagation.cmx : \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/optim/remove_assigned_but_not_read_vars.cmo : \
+    src/BHDL/BHDL_syntax.cmo
+src/BHDL/optim/remove_assigned_but_not_read_vars.cmx : \
+    src/BHDL/BHDL_syntax.cmx
+src/BHDL/optim/war_collection.cmo : \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/optim/war_collection.cmx : \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/simul/gen_ocaml.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/BHDL/compile/list_machines.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/simul/gen_ocaml.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/BHDL/compile/list_machines.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/BHDL/simul/gen_testbench.cmo : \
+    src/BHDL/compile/gen_vhdl_aux.cmo \
+    src/BHDL/compile/gen_vhdl.cmo \
+    src/BHDL/compile/flat_let_atom.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/simul/gen_testbench.cmx : \
+    src/BHDL/compile/gen_vhdl_aux.cmx \
+    src/BHDL/compile/gen_vhdl.cmx \
+    src/BHDL/compile/flat_let_atom.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/backend/gen_BHDL.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/compile/backend/naming_convention.cmo \
+    src/Eclat/compile/middle_end/normalize/instantiate.cmo \
+    src/Eclat/compile/instantaneous.cmo \
+    src/Eclat/syntax/free_vars.cmo \
+    src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/backend/gen_BHDL.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/compile/backend/naming_convention.cmx \
+    src/Eclat/compile/middle_end/normalize/instantiate.cmx \
+    src/Eclat/compile/instantaneous.cmx \
+    src/Eclat/syntax/free_vars.cmx \
+    src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/backend/naming_convention.cmo :
+src/Eclat/compile/backend/naming_convention.cmx :
+src/Eclat/compile/compile.cmo : \
+    src/BHDL/optim/war_collection.cmo \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/compile/middle_end/rename_main_arg.cmo \
+    src/prelude.cmo \
+    src/Eclat/compile/middle_end/middle_end.cmo \
+    src/BHDL/compile/list_machines.cmo \
+    src/Eclat/compile/middle_end/transform/inline.cmo \
+    src/BHDL/compile/gen_vhdl.cmo \
+    src/BHDL/simul/gen_ocaml.cmo \
+    src/Eclat/compile/backend/gen_BHDL.cmo \
+    src/BHDL/compile/flat_let_atom.cmo \
+    src/Eclat/compile/inspect/display_target.cmo \
+    src/Eclat/compile/inspect/display_internal_steps.cmo \
+    src/BHDL/count_externals.cmo \
+    src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmo \
+    src/Eclat/compile/middle_end/analyses/causality_esterel.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/BHDL/optim/BHDL_propagation.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/compile.cmx : \
+    src/BHDL/optim/war_collection.cmx \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/compile/middle_end/rename_main_arg.cmx \
+    src/prelude.cmx \
+    src/Eclat/compile/middle_end/middle_end.cmx \
+    src/BHDL/compile/list_machines.cmx \
+    src/Eclat/compile/middle_end/transform/inline.cmx \
+    src/BHDL/compile/gen_vhdl.cmx \
+    src/BHDL/simul/gen_ocaml.cmx \
+    src/Eclat/compile/backend/gen_BHDL.cmx \
+    src/BHDL/compile/flat_let_atom.cmx \
+    src/Eclat/compile/inspect/display_target.cmx \
+    src/Eclat/compile/inspect/display_internal_steps.cmx \
+    src/BHDL/count_externals.cmx \
+    src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmx \
+    src/Eclat/compile/middle_end/analyses/causality_esterel.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/BHDL/optim/BHDL_propagation.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/inspect/display_internal_steps.cmo : \
+    src/Eclat/syntax/ast_pprint.cmo
+src/Eclat/compile/inspect/display_internal_steps.cmx : \
+    src/Eclat/syntax/ast_pprint.cmx
+src/Eclat/compile/inspect/display_target.cmo : \
+    src/BHDL/BHDL_syntax.cmo
+src/Eclat/compile/inspect/display_target.cmx : \
+    src/BHDL/BHDL_syntax.cmx
+src/Eclat/compile/instantaneous.cmo : \
+    src/operators.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/instantaneous.cmx : \
+    src/operators.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/causality_esterel.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/causality_esterel.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/check_exec_mem.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/check_exec_mem.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/check_exec_mem_reset.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/check_exec_mem_reset.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmo : \
+    src/Eclat/compile/middle_end/analyses/no_exit.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/check_pauses_loop.cmx : \
+    src/Eclat/compile/middle_end/analyses/no_exit.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/check_tail_call.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/check_tail_call.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/analyses/no_exit.cmo : \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/analyses/no_exit.cmx : \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/middle_end.cmo : \
+    src/Eclat/compile/middle_end/transform/unroll.cmo \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/compile/middle_end/transform/specialize.cmo \
+    src/Eclat/syntax/rename_fix.cmo \
+    src/Eclat/compile/middle_end/normalize/propagation.cmo \
+    src/prelude.cmo \
+    src/Eclat/compile/middle_end/normalize/move_down_gfun_under_exec_and_par.cmo \
+    src/Eclat/compile/middle_end/monomorphize.cmo \
+    src/Eclat/compile/middle_end/transform/matching.cmo \
+    src/Eclat/compile/middle_end/normalize/let_floating.cmo \
+    src/Eclat/compile/middle_end/transform/lambda_lifting.cmo \
+    src/Eclat/compile/middle_end/normalize/instantiate.cmo \
+    src/Eclat/compile/middle_end/transform/insert_bound_checking.cmo \
+    src/Eclat/compile/middle_end/transform/inline.cmo \
+    src/Eclat/compile/middle_end/transform/globalize_arrays.cmo \
+    src/Eclat/compile/middle_end/normalize/fun_shape_entry_point.cmo \
+    src/Eclat/compile/middle_end/normalize/fun_assign_name.cmo \
+    src/Eclat/compile/middle_end/normalize/flat_par.cmo \
+    src/Eclat/compile/middle_end/transform/expand.cmo \
+    src/Eclat/compile/inspect/display_internal_steps.cmo \
+    src/Eclat/compile/middle_end/analyses/check_exec_mem_reset.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast.cmo \
+    src/Eclat/compile/middle_end/normalize/anf.cmo
+src/Eclat/compile/middle_end/middle_end.cmx : \
+    src/Eclat/compile/middle_end/transform/unroll.cmx \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/compile/middle_end/transform/specialize.cmx \
+    src/Eclat/syntax/rename_fix.cmx \
+    src/Eclat/compile/middle_end/normalize/propagation.cmx \
+    src/prelude.cmx \
+    src/Eclat/compile/middle_end/normalize/move_down_gfun_under_exec_and_par.cmx \
+    src/Eclat/compile/middle_end/monomorphize.cmx \
+    src/Eclat/compile/middle_end/transform/matching.cmx \
+    src/Eclat/compile/middle_end/normalize/let_floating.cmx \
+    src/Eclat/compile/middle_end/transform/lambda_lifting.cmx \
+    src/Eclat/compile/middle_end/normalize/instantiate.cmx \
+    src/Eclat/compile/middle_end/transform/insert_bound_checking.cmx \
+    src/Eclat/compile/middle_end/transform/inline.cmx \
+    src/Eclat/compile/middle_end/transform/globalize_arrays.cmx \
+    src/Eclat/compile/middle_end/normalize/fun_shape_entry_point.cmx \
+    src/Eclat/compile/middle_end/normalize/fun_assign_name.cmx \
+    src/Eclat/compile/middle_end/normalize/flat_par.cmx \
+    src/Eclat/compile/middle_end/transform/expand.cmx \
+    src/Eclat/compile/inspect/display_internal_steps.cmx \
+    src/Eclat/compile/middle_end/analyses/check_exec_mem_reset.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast.cmx \
+    src/Eclat/compile/middle_end/normalize/anf.cmx
+src/Eclat/compile/middle_end/monomorphize.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/rename_fix.cmo \
+    src/prelude.cmo \
+    src/Eclat/compile/middle_end/transform/inline.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/monomorphize.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/rename_fix.cmx \
+    src/prelude.cmx \
+    src/Eclat/compile/middle_end/transform/inline.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/anf.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/anf.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/flat_par.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/flat_par.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/fun_assign_name.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/fun_assign_name.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/fun_shape_entry_point.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/fun_shape_entry_point.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/instantiate.cmo : \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/instantiate.cmx : \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/let_floating.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/let_floating.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/move_down_gfun_under_exec_and_par.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/free_vars.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/move_down_gfun_under_exec_and_par.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/free_vars.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/normalize/propagation.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/compile/instantaneous.cmo \
+    src/Eclat/compile/middle_end/transform/inline.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/normalize/propagation.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/compile/instantaneous.cmx \
+    src/Eclat/compile/middle_end/transform/inline.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/rename_main_arg.cmo : \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/rename_main_arg.cmx : \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/expand.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/typing/size_limits.cmo \
+    src/prelude.cmo \
+    src/Eclat/compile/middle_end/transform/matching.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo \
+    src/Eclat/compile/middle_end/normalize/anf.cmo
+src/Eclat/compile/middle_end/transform/expand.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/typing/size_limits.cmx \
+    src/prelude.cmx \
+    src/Eclat/compile/middle_end/transform/matching.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx \
+    src/Eclat/compile/middle_end/normalize/anf.cmx
+src/Eclat/compile/middle_end/transform/globalize_arrays.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/globalize_arrays.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/inline.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/inline.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/insert_bound_checking.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/operators.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/insert_bound_checking.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/operators.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/lambda_lifting.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/free_vars.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/lambda_lifting.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/free_vars.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/matching.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/matching.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/specialize.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/rename_fix.cmo \
+    src/Eclat/compile/middle_end/normalize/propagation.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/compile/middle_end/normalize/let_floating.cmo \
+    src/Eclat/compile/middle_end/transform/inline.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_rename.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/specialize.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/rename_fix.cmx \
+    src/Eclat/compile/middle_end/normalize/propagation.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/compile/middle_end/normalize/let_floating.cmx \
+    src/Eclat/compile/middle_end/transform/inline.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_rename.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/compile/middle_end/transform/unroll.cmo : \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/compile/middle_end/transform/unroll.cmx : \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/frontend/clean_simul.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/frontend/clean_simul.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/frontend/current_filename.cmo :
+src/Eclat/frontend/current_filename.cmx :
+src/Eclat/frontend/fix_int_lit_size.cmo :
+src/Eclat/frontend/fix_int_lit_size.cmx :
+src/Eclat/frontend/frontend.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/frontend/parser.cmi \
+    src/Eclat/frontend/current_filename.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/frontend/frontend.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/frontend/parser.cmx \
+    src/Eclat/frontend/current_filename.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/frontend/parser.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/operators.cmo \
+    src/Eclat/frontend/current_filename.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mk.cmo \
+    src/Eclat/syntax/ast.cmo \
+    src/Eclat/frontend/parser.cmi
+src/Eclat/frontend/parser.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/operators.cmx \
+    src/Eclat/frontend/current_filename.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mk.cmx \
+    src/Eclat/syntax/ast.cmx \
+    src/Eclat/frontend/parser.cmi
+src/Eclat/frontend/parser.cmi : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/interp/interp.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/interp/special_subst.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/interp/interp.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/interp/special_subst.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/interp/special_subst.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/interp/special_subst.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/operators.cmo
+src/Eclat/syntax/ast.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/operators.cmx
+src/Eclat/syntax/ast_mapper.cmo : \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_mapper.cmx : \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast_mk.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_mk.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast_pprint.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/operators.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_pprint.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/operators.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast_rename.cmo : \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_rename.cmx : \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast_subst.cmo : \
+    src/prelude.cmo \
+    src/Eclat/syntax/pattern.cmo \
+    src/Eclat/syntax/free_vars.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_subst.cmx : \
+    src/prelude.cmx \
+    src/Eclat/syntax/pattern.cmx \
+    src/Eclat/syntax/free_vars.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/ast_undecorated.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/ast_undecorated.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/free_vars.cmo : \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/free_vars.cmx : \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/map_pi.cmo : \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/map_pi.cmx : \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/pattern.cmo : \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/pattern.cmx : \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/syntax/rename_fix.cmo : \
+    src/Eclat/syntax/map_pi.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_mapper.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/syntax/rename_fix.cmx : \
+    src/Eclat/syntax/map_pi.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_mapper.cmx \
+    src/Eclat/syntax/ast.cmx
+src/Eclat/typing/size_limits.cmo : \
+    src/prelude.cmo
+src/Eclat/typing/size_limits.cmx : \
+    src/prelude.cmx
+src/Eclat/typing/types.cmo : \
+    src/prelude.cmo
+src/Eclat/typing/types.cmx : \
+    src/prelude.cmx
+src/Eclat/typing/typing.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_subst.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast.cmo
+src/Eclat/typing/typing.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_subst.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast.cmx
+src/main.cmo : \
+    src/Eclat/typing/typing.cmo \
+    src/Eclat/typing/types.cmo \
+    src/Eclat/compile/middle_end/normalize/propagation.cmo \
+    src/prelude.cmo \
+    src/operators.cmo \
+    src/Eclat/interp/interp.cmo \
+    src/Eclat/compile/middle_end/transform/insert_bound_checking.cmo \
+    src/BHDL/compile/gen_vhdl_aux.cmo \
+    src/BHDL/compile/gen_vhdl.cmo \
+    src/BHDL/compile/gen_top/gen_top.cmo \
+    src/BHDL/simul/gen_testbench.cmo \
+    src/Eclat/compile/backend/gen_BHDL.cmo \
+    src/Eclat/frontend/frontend.cmo \
+    src/Eclat/frontend/fix_int_lit_size.cmo \
+    src/Eclat/compile/inspect/display_target.cmo \
+    src/Eclat/compile/inspect/display_internal_steps.cmo \
+    src/Eclat/compile/compile.cmo \
+    src/Eclat/frontend/clean_simul.cmo \
+    src/Eclat/compile/middle_end/analyses/check_tail_call.cmo \
+    src/BHDL/BHDL_typing.cmo \
+    src/Eclat/syntax/ast_undecorated.cmo \
+    src/Eclat/syntax/ast_pprint.cmo \
+    src/Eclat/syntax/ast_mk.cmo
+src/main.cmx : \
+    src/Eclat/typing/typing.cmx \
+    src/Eclat/typing/types.cmx \
+    src/Eclat/compile/middle_end/normalize/propagation.cmx \
+    src/prelude.cmx \
+    src/operators.cmx \
+    src/Eclat/interp/interp.cmx \
+    src/Eclat/compile/middle_end/transform/insert_bound_checking.cmx \
+    src/BHDL/compile/gen_vhdl_aux.cmx \
+    src/BHDL/compile/gen_vhdl.cmx \
+    src/BHDL/compile/gen_top/gen_top.cmx \
+    src/BHDL/simul/gen_testbench.cmx \
+    src/Eclat/compile/backend/gen_BHDL.cmx \
+    src/Eclat/frontend/frontend.cmx \
+    src/Eclat/frontend/fix_int_lit_size.cmx \
+    src/Eclat/compile/inspect/display_target.cmx \
+    src/Eclat/compile/inspect/display_internal_steps.cmx \
+    src/Eclat/compile/compile.cmx \
+    src/Eclat/frontend/clean_simul.cmx \
+    src/Eclat/compile/middle_end/analyses/check_tail_call.cmx \
+    src/BHDL/BHDL_typing.cmx \
+    src/Eclat/syntax/ast_undecorated.cmx \
+    src/Eclat/syntax/ast_pprint.cmx \
+    src/Eclat/syntax/ast_mk.cmx
+src/operators.cmo : \
+    src/Eclat/typing/types.cmo \
+    src/prelude.cmo
+src/operators.cmx : \
+    src/Eclat/typing/types.cmx \
+    src/prelude.cmx
+src/prelude.cmo :
+src/prelude.cmx :
+src/Eclat/frontend/parser.cmo : \
+    src/Eclat/frontend/parser.cmi
+src/Eclat/frontend/parser.cmx : \
+    src/Eclat/frontend/parser.cmi
+src/Eclat/frontend/parser.cmi :

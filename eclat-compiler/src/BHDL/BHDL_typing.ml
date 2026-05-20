@@ -1,0 +1,579 @@
+open BHDL_syntax
+
+let emit_warning_flag = ref false
+
+let hashtbl_array_from_file = Hashtbl.create 5 ;;
+
+let ptr_taken x = "$"^x^"_lock" 
+
+
+let global_sigs = ref Ast.((SMap.empty : string SMap.t));;
+
+
+(** [canon t] put the type [t] in canonical form by replacing
+  instantiated variables free in [t] by their definition,
+  themselves put in canonical form. *)
+let rec canon = function
+  | TVar{contents=V _} as t -> t
+  | TVar({contents=T t'} as v) ->
+      let t2 = canon t' in
+      v := T t2; t2
+  | TInt tz -> TInt (canon tz)
+  | TBool | TUnit | TString _ as t -> t
+  | TStatic{elem;size} -> TStatic{elem=canon elem;size=canon size}
+  | TTuple ts -> TTuple(List.map canon ts)
+  | TVector{elem;size} -> TVector{elem=canon elem;size=canon size}
+  | TVect _ as t -> t
+  | TSize _ as t -> t
+  | TSize_add(size,n) -> TSize_add(canon size,n)
+  | TSize_mul(n,size) -> TSize_mul(n,canon size)
+  | TSize_pow(size) -> TSize_pow(canon size)
+  | TAbstract(x,ns,ts) -> TAbstract(x,List.map canon ns,List.map canon ts)
+  | TSig t -> TSig (canon t)
+  | TRecord b_list -> TRecord (List.map (fun (x,t) -> x,canon t) b_list)
+
+open Size_limits
+
+(** [size_ty t] returns the size (in number of bytes) of type [t]
+  Unspecified size are fixe to 32 bits by default
+  (customizable via argument [?when_tvar]) *)
+let rec size_ty =
+  let when_tvar = 32 in
+  let seen_size_vars = Hashtbl.create 1 in
+  fun t ->
+    match t with
+    | TInt n -> size_ty n
+    | TBool -> 1
+    | TUnit -> 1
+    | TTuple ts -> List.fold_left (Size_op.add) 0 (List.map size_ty ts)
+    | TVar{contents=T t} -> size_ty t
+    | TVar{contents=V n} ->
+          let open Prelude.Errors in
+          if !emit_warning_flag then 
+            (if Hashtbl.mem seen_size_vars n then () else
+              (Hashtbl.add seen_size_vars n ();
+               warning (fun fmt -> 
+                 Format.fprintf fmt "Unknown value size in the generated code replaced by %d-bit default size.\n" when_tvar)
+            ));
+          when_tvar
+    | TString tz -> (Size_op.mul (size_ty tz) 8)
+    | TStatic{elem;size} | TVector{elem;size} -> Size_op.mul (size_ty elem) (size_ty size)
+    | TVect n -> n
+    | TSize n -> n
+    | TSize_add(sz,n) -> Size_op.add (size_ty sz) n
+    | TSize_mul(n,sz) -> n * size_ty sz
+    | TSize_pow(sz) -> Size_op.pow 2 (size_ty sz) 
+    | TAbstract(x,ns,tys) ->
+        let prod_ns = List.fold_left (Size_op.mul) 1 (List.map size_ty ns) in
+        let sum_ts = if tys = [] then 1 else List.fold_left Size_op.add 0 (List.map size_ty tys) in
+        (match Hashtbl.find_opt Types.global_type_declarations x with
+        | None ->
+            let k = Size_op.mul prod_ns sum_ts in
+            if List.length tys > 1 then   
+              Prelude.Errors.warning (fun fmt -> 
+                Format.fprintf fmt "unknown size for type %s is replaced by %d\n" x k
+              );
+            k
+        | Some (Types.Abstract(("only_size_sum",_,_,_),_)) -> List.fold_left (Size_op.add) 0 (List.map size_ty ns)
+        | Some (Types.Abstract(("mul",_,_,_),_)) -> Size_op.mul prod_ns sum_ts
+        | Some (Types.Abstract(("only_size",_,_,_),_)) -> prod_ns
+        | Some (Types.Abstract((degit,_,_,_),_)) -> 
+                                if ns=[] && tys=[] (* todo: better distinguish both *)
+                                then int_of_string degit else
+                                Size_op.mul (int_of_string degit) (List.fold_left (Size_op.add) 0 (List.map size_ty ns))
+        | Some (Types.Alias _) -> assert false (* should not happen *))
+   | TSig t -> size_ty t
+   | TRecord b_list -> List.fold_left (fun acc (_,t) -> Size_op.add acc (size_ty t)) 0 b_list
+
+let rec string_of_ty = function
+  | TInt tz -> "int<"^string_of_ty tz^">"
+  | TBool -> "bool"
+  | TUnit -> "unit"
+  | TString tz -> "string<"^string_of_ty tz^">"
+  | TTuple ts -> "("^(String.concat "*" @@ List.map string_of_ty ts)^")"
+  | TVar{contents=T t} -> string_of_ty t
+  | TVar{contents=V s} -> s
+  | TVect n -> "vect<"^string_of_int n^">"
+  | TSize n -> "size<"^string_of_int n^">"
+  | TSize_add(sz,n) -> "("^string_of_ty sz^"+"^string_of_int n^")"
+  | TSize_mul(n,sz) -> "("^string_of_int n^"*"^string_of_ty sz^")"
+  | TSize_pow(sz) -> "(2^"^string_of_ty sz^")"
+  | TVector {elem ; size} -> string_of_ty elem ^ " vector<" ^ string_of_ty size ^ ">"
+  | TStatic {elem ; size} -> string_of_ty elem ^ " static<" ^ string_of_ty size ^ ">"
+  | TAbstract(x,ns,ts) ->  "("^(String.concat "," @@ List.map string_of_ty ts)^") " 
+                           ^ x^"<"^ (String.concat "," @@ List.map string_of_ty ns) ^">" 
+  | TSig t -> "sig<"^string_of_ty t^">"
+  | TRecord b_list ->
+      "{"^String.concat ";" (
+      List.map (fun (x,t) -> x^" : "^string_of_ty t) b_list
+      ) ^ "}"
+
+exception CannotUnify of (ty*ty)
+
+let rec unify t1 t2 =
+  let cannot_unify t1 t2 = raise (CannotUnify(t1,t2)) in
+  (* todo: check cycle (eg. 'a ~ ('a * 'a)) *)
+  (*Printf.printf "%s" ("---->"^("unify "^string_of_ty(canon t1)^" and "^string_of_ty (canon t2) ^"\n")); *)
+  match canon t1,canon t2 with
+  | TInt tz1, TInt tz2 ->
+      if not (Fix_int_lit_size.is_set ()) then () else
+      begin
+         unify tz1 (TSize (Fix_int_lit_size.get_size_type ()))
+      end;
+      unify tz1 tz2
+  | TVect n, TVect m
+  | TSize n, TSize m -> if n <> m then cannot_unify t1 t2
+  (* ************************ *)
+  (** NB: must implement the same rules than in typing.ml *)
+  | TSize_add(sz,n), TSize_add(sz',n') ->
+      if n <= n' then
+        let m = n'-n in
+        if m = 0 then unify sz sz' else
+        unify sz (TSize_add(sz',m))
+      else
+        let m = n-n' in
+        unify (TSize_add(sz,m)) sz'
+  | TSize n, TSize_add(sz,m)
+  | TSize_add(sz,m), TSize n -> 
+      let k = n-m in
+      if k < 0 then cannot_unify t1 t2 else
+      unify (TSize k) sz
+  | TSize n, TSize_mul(2,sz) ->
+      if n mod 2 = 0 then
+        unify (TSize (n/2)) sz
+      else cannot_unify t1 t2
+  | TSize_mul (2,sz), TSize_mul(2,sz') ->
+      unify sz sz'
+  | TSize_mul(2,sz), TSize_add(sz',n)
+  | TSize_add(sz',n), TSize_mul(2,sz) ->
+      let sz2 = new_tvar() in
+      if n mod 2 = 0 then (
+        unify sz' (TSize_mul(2,sz2));
+        unify sz (TSize_add(sz2,n/2))
+      ) else (
+        unify sz' (TSize_add(TSize_mul(2,sz2),1));
+        unify sz (TSize_add(sz2,(Size_limits.Size_op.add n 1)/2)))
+  | TSize_pow(sz), TSize n ->
+      let k = int_of_float (Float.log2 (float n)) in
+      if (1 lsl k) == n then unify sz (TSize k)
+    else cannot_unify t1 t2
+  | TSize_pow(sz), TSize_pow(sz') ->
+      unify sz sz'
+  | TSize_mul(2,sz'), TSize_pow(sz)
+  | TSize_pow(sz), TSize_mul(2,sz') -> 
+      let sz2 = new_tvar() in
+      unify (TSize_add(sz2,1)) sz;
+      unify (TSize_pow(sz2)) sz'
+  | TSize_add(sz',n),TSize_pow(sz)
+  | TSize_pow(sz), TSize_add(sz',n) ->
+      if n = 0 then unify (TSize_pow(sz)) sz' else
+      if n mod 2 == 0 then (
+        let sz2 = new_tvar() in
+        unify (TSize_mul(2,sz2)) sz';
+        unify (TSize_pow(sz)) (TSize_mul (2,TSize_add(sz2,n/2))))
+      else (unify (TSize_add(TSize_pow(sz),-1)) (TSize_add(sz',n-1)))
+  (* ************************ *)
+  | TBool,TBool -> ()
+  | TUnit,TUnit -> ()
+  | TTuple ts,TTuple ts' ->
+    if List.compare_lengths ts ts' <> 0 then cannot_unify t1 t2
+    else List.iter2 unify ts ts'
+  | TVector{elem=te;size=tz},TVector{elem=te';size=tz'} ->
+      unify te te';
+      unify tz tz'
+  | TVar ({contents=V n} as r),TVar {contents=V n'} -> if n = n' then () else r := T t2; ()
+  | TVar {contents=T t1},t2 | t1,TVar {contents=T t2} -> unify t1 t2
+  | TVar ({contents=V _} as r),t | t,TVar ({contents=V _} as r) ->
+    r := T t
+  | TString tz,TString tz' ->
+      unify tz tz'
+  | TStatic{elem=te;size=tz},TStatic{elem=te';size=tz'} ->
+      unify te te';
+      unify tz tz'
+  | TAbstract(x,ns,ts),TAbstract(x',ns',ts') ->
+      if x <> x' 
+      || List.compare_lengths ts ts' <> 0
+      || List.compare_lengths ns ns' <> 0 
+      then cannot_unify t1 t2
+      else (List.iter2 unify ts ts'; List.iter2 unify ns ns')
+  | TSig t1, TSig t2 -> unify t1 t2
+  | TRecord bs1, TRecord bs2 ->
+      let rec loop l1 l2 =
+        match l1,l2 with
+        | [],[] -> ()
+        | (x,t)::xs,(y,t')::ys -> 
+            if x <> y then cannot_unify t1 t2;
+            unify t t';
+            loop xs ys
+        | _ -> cannot_unify t1 t2
+      in loop bs1 bs2 
+  | t1,t2 -> cannot_unify t1 t2
+
+let add_typing_env h (x:string) (t:ty) =
+  (match Hashtbl.find_opt h x with
+   | None -> Hashtbl.add h x (canon t)
+   | Some t' -> unify t t'; (try Hashtbl.replace h x (canon t') with _ -> assert false))
+
+let compute_tag_size = Types.compute_tag_size
+
+
+let rec translate_tyB =
+  let open Types in
+  let hvar = Hashtbl.create 10 in
+  function
+  | TyB_int sz -> TInt (translate_size sz)
+  | TyB_bool -> TBool
+  | TyB_unit -> TUnit
+  | TyB_tuple tyBs -> TTuple (List.map translate_tyB tyBs)
+  | TyB_var r -> 
+     if Hashtbl.mem hvar r then 
+       Hashtbl.find hvar r else
+      (let t = TVar(ref @@ match !r with
+                   | Unknown{id;_} -> V (string_of_int id)
+                   | Is t -> T (translate_tyB t)) in
+      Hashtbl.add hvar r t;
+      t)
+  | TyB_abstract(x,szs,tyB_list) -> 
+      TAbstract(x,List.map  translate_size szs, List.map translate_tyB tyB_list)
+  | TyB_sum(cs) ->
+      let size_tag = compute_tag_size cs in
+      let n = List.fold_left (max) 0 @@ List.map (fun (_,t) -> size_ty (translate_tyB t)) cs in
+      TTuple[TInt(TSize size_tag);TVect(n)]
+  | TyB_alias(x,sz_list,tyB_list) ->
+      let ty_list = List.map (fun t -> Ty_base t) tyB_list in
+      let tyB' = Types.as_tyB ~loc:Prelude.dloc @@ 
+                 alias_instance x sz_list ty_list in
+      translate_tyB tyB'
+  | TyB_string sz -> TString (translate_size sz)
+  | TyB_record{fields;row} ->
+      (* assert (rank = TyB_unit); *)
+      let bs = List.map (fun (x,tyB) -> x, translate_tyB tyB) (SMap.bindings fields) in
+      TRecord(bs)
+
+  and translate_size = 
+    let open Types in
+  let hvar = Hashtbl.create 10 in
+  function sz -> 
+    match Types.canon_size sz with
+    | Sz_lit n -> TSize n
+    | Sz_var r -> 
+      if Hashtbl.mem hvar r then Hashtbl.find hvar r else
+        (let t = TVar(ref @@ match !r with
+                    | Unknown{id;_} -> V (string_of_int id)
+                    | Is sz -> T (translate_size sz)) in
+        Hashtbl.add hvar r t;
+        t)
+    | Sz_add(sz,n) -> TSize_add(translate_size sz,n) 
+    | Sz_mul(n,sz) -> TSize_mul(n,translate_size sz)
+    | Sz_pow2(sz) -> TSize_pow(translate_size sz) 
+    (* | _ -> assert false (* TSize 32 ? *)*)
+
+let rec translate_ty =
+  let hvar = Hashtbl.create 10 in
+  let open Types in
+  function
+  | Ty_base(tyB) -> translate_tyB tyB
+  | Ty_tuple(ts) -> TTuple (List.map translate_ty ts)
+  | Ty_var r -> 
+     if Hashtbl.mem hvar r then Hashtbl.find hvar r else
+      (let t = TVar(ref @@ match !r with
+                   | Unknown{id;_} -> V (string_of_int id)
+                   | Is t -> T (translate_ty t)) in
+      Hashtbl.add hvar r t;
+      t) (*todo*) 
+  (* *)
+  (* | Types.T_static(t) -> translate_ty t
+  *)
+  | Ty_ref tyB -> translate_tyB tyB
+  | Ty_array(sz,tyB,_) -> TStatic{elem=translate_tyB tyB;size=translate_size sz}
+  | Ty_signal(tyB) -> TSig(translate_tyB tyB)
+  | Ty_trap _ -> assert false
+  | Ty_fun _ -> assert false
+  | Ty_size _ -> assert false
+  | Ty_alias(y,sz_list,ty_list) ->
+      translate_ty @@ Types.alias_instance y sz_list ty_list
+
+let rec typing_c = function
+  |  Unit -> TUnit
+  |  (Int{value=_;tsize=tz}) ->
+       if not (Fix_int_lit_size.is_set ()) then () else begin
+         unify tz (TSize (Fix_int_lit_size.get_size_type ()))
+       end;
+       TInt tz
+  |  (Bool _) -> TBool
+  |  (Char _) -> translate_tyB Operators.char_
+  |  (Enum _) -> (new_tvar ()) (* TODO! *)
+  |  (CTuple cs) -> TTuple(List.map typing_c cs)
+  |  (CVector cs) -> 
+       let v = new_tvar() in
+       List.iter (fun c -> unify (typing_c c) v) cs;
+       TAbstract("vect",[TSize (List.length cs)],[v])
+  |  (String s) -> TString (TSize(String.length s))
+  |  (CSize n) -> TSize n
+  | C_encode(c,n) ->
+      let ty = typing_c c in
+      assert (size_ty ty <= n);
+      TVect n
+
+let rec typing_op ~genv h t op =
+  match op with
+  | Runtime (External_fun (x,tyy)) ->
+      (match Ast.SMap.find_opt x Ast.(genv.operators) with
+       | Some (ty,_) -> 
+          let ty = Types.(instance (generalize [] ty)) in
+          Typing.unify_ty ~loc:Prelude.dloc ty tyy;
+          (match Types.canon_ty ty with
+           | Types.Ty_fun(arg,_,ret) ->
+              unify (translate_ty arg) t;
+              translate_tyB ret
+           | _ -> assert false)
+       | _ -> Prelude.Errors.raise_error ()
+                 ~msg:("unbound operator `"^x^"`. Hint: Stdlib should be required."))
+  | Runtime p ->
+      (match Operators.ty_op ~externals:Ast.(genv.operators) p with
+       | Types.Ty_fun(arg,dur,ret) ->
+          unify (translate_ty arg) t;
+          translate_tyB ret
+       | _ -> assert false)
+  | If ->
+         let a = new_tvar () in
+         unify (TTuple [TBool;a;a]) t;
+         a
+  | GetTuple(i,n,ty) ->
+        unify ty t;
+        let ts = List.init n (fun _ -> new_tvar()) in
+        unify ty (TTuple (ts));
+        List.nth ts i
+  | TyConstr ty ->
+      unify ty t;
+      t
+
+let trace_last_exp = ref (A_const Unit)
+
+let rec typing_a ~genv h a =
+  trace_last_exp := a;
+  match a with
+  | A_const c ->
+      typing_c c
+  | A_var x ->
+      let t = (new_tvar ()) in
+      add_typing_env h x t;
+      t
+  | A_call(op,args) ->
+      let t = typing_a ~genv h args in
+      typing_op ~genv h t op
+  | A_tuple es ->
+      TTuple (List.map (typing_a ~genv h) es)
+  | A_vector es ->
+       let v = new_tvar() in
+       List.iter (fun a -> unify (typing_a ~genv h a) v) es;
+       TAbstract("vect",[TSize (List.length es)],[v])
+  | A_letIn(x,a1,a2) ->
+      let t = typing_a ~genv h a1 in
+      add_typing_env h x t;
+      typing_a ~genv h a2
+  | A_string_get(sx,ix) ->
+      add_typing_env h sx (TString (new_tvar()));
+      add_typing_env h ix (TInt (TSize 32));
+      TInt(TSize 8)
+
+  | A_ptr_taken(x) ->
+      TBool
+
+  | A_array_get(x,y) ->
+      let telem = new_tvar () in
+      let tz = new_tvar () in
+      add_typing_env h x (TStatic{elem=telem;size=tz});
+      add_typing_env h y (TInt (TSize 32));
+      telem
+
+  | A_array_length(x,ty) ->
+      add_typing_env h x (TStatic{elem=new_tvar();size=new_tvar()});
+      TInt ty
+
+  | A_encode(x,ty,n) ->
+      add_typing_env h x ty;
+      assert (size_ty ty <= n);
+      TVect n
+
+  | A_decode(x,ty) ->
+      add_typing_env h x (new_tvar());
+      ty
+  
+  | A_sig_get x ->
+      let t = new_tvar () in
+      if Ast.SMap.mem x !global_sigs then add_typing_env h (Ast.SMap.find x !global_sigs) (TSig(t)) else ();
+      add_typing_env h x (TSig(t));
+      t
+  | A_record(b_list) ->
+      TRecord(List.map (fun (x,a) -> x,typing_a ~genv h a) b_list)
+  | A_record_field(x,y,t) ->
+      add_typing_env h x t;
+      (match t with
+       | TRecord(b_list) -> List.assoc y b_list
+       | _ -> assert false)
+
+let error_unbound_external x =
+  Prelude.Errors.error (fun fmt -> 
+    Format.fprintf fmt "@,unbound external %s" x
+  ) 
+
+let rec typing_s ~genv ~result h s =
+  (* Printf.printf "==> %d\n" (Hashtbl.length h); flush stdout; *)
+  match s with
+  | S_skip -> ()
+  | S_set(x,a) ->
+      let t = typing_a ~genv h a in
+      (* (Format.fprintf Format.std_formatter "======> (%s : %a)\n" x Fsm_syntax.Debug.pp_ty (canon t)); *)
+      add_typing_env h x t
+  | S_sig_set(x,a) ->
+   let t = typing_a ~genv h a in
+       (* (Format.fprintf Format.std_formatter "======> (%s : %a)\n" x Fsm_syntax.Debug.pp_ty (canon t)); *)
+      if Ast.SMap.mem x !global_sigs then add_typing_env h (Ast.SMap.find x !global_sigs) (TSig(t)) else ();
+      add_typing_env h x (TSig(t))
+  | S_acquire_lock(l) 
+  | S_release_lock(l) ->
+      add_typing_env h (ptr_taken l) (TBool) 
+      (* add lock variable in the typing environment
+         (required for VHDL code generation) *)
+  | S_read_start(x,idx) ->
+      let telem = new_tvar () in
+      let tz = new_tvar () in
+      let tz2 = new_tvar () in
+      add_typing_env h x (TStatic{elem=telem;size=tz});
+      let tidx = typing_a ~genv h idx in
+      unify tidx (TInt tz2)
+  | S_read_stop(x,l) ->
+      let telem = new_tvar () in
+      let tz = new_tvar () in
+      add_typing_env h x telem;
+      add_typing_env h l (TStatic{elem=telem;size=tz})
+  | S_write_start(x,idx,a) ->
+      let telem = typing_a ~genv h a in
+      let tz = new_tvar () in
+      let tz2 = new_tvar () in
+      add_typing_env h x (TStatic{elem=telem;size=tz});
+      let tidx = typing_a ~genv h idx in
+      unify tidx (TInt tz2)
+  | S_array_set(x,idx,a) ->
+      let telem = typing_a ~genv h a in
+      let tz = new_tvar () in
+      let tz2 = new_tvar () in
+      add_typing_env h x (TStatic{elem=telem;size=tz});
+      add_typing_env h idx tz2
+  | S_write_stop(x) ->
+      let t = new_tvar () in
+      add_typing_env h x t
+  | S_array_from_file(y,a) ->
+      Hashtbl.add hashtbl_array_from_file y ();
+      let telem = new_tvar() in
+      let tz = new_tvar () in
+      add_typing_env h y (TStatic{elem=telem;size=tz});
+      let tname = typing_a ~genv h a in
+      let tz2 = new_tvar () in
+      unify tname (TString tz2);
+  | S_if(x,s,so) ->
+      add_typing_env h x TBool;
+      typing_s ~genv ~result h s;
+      Option.iter (typing_s ~genv ~result h) so
+  | S_case(x,hs,os) ->
+      let t = new_tvar () in
+      add_typing_env h x t;
+      List.iter (fun (cs,s) ->
+          List.iter (fun c -> unify (typing_c c) t) cs;
+          typing_s ~genv ~result h s) hs;
+      (match os with
+      | None -> ()
+      | Some s_els -> typing_s ~genv ~result h s_els)
+  | S_seq(s1,s2) ->
+      typing_s ~genv ~result h s1; 
+      typing_s ~genv ~result h s2
+  | S_continue _ ->
+      ()
+  | S_letIn(x,a,s) ->
+      (add_typing_env h x (typing_a ~genv h a));
+      typing_s ~genv ~result h s
+  | S_fsm(_,rdy,result2,_,ts,s) ->
+      typing_fsm h ~genv ~rdy ~result:result2 ~ty_result:(new_tvar()) (ts,s)
+  | S_in_fsm(_,s) ->
+      typing_s ~genv ~result h s
+  | S_call(op,args) ->
+      let t = typing_a ~genv h args in
+      unify (typing_op ~genv h t (Runtime op)) TUnit
+  | S_external_run(f,i,res,rdy,a) ->
+      (match List.assoc_opt f Ast.(genv.externals) with
+      | None -> error_unbound_external(f)
+      | Some (ty,_,_) -> 
+          (match Types.canon_ty ty with
+          | Types.Ty_fun(arg,_,ret_ty) ->
+              add_typing_env h res (translate_tyB ret_ty);
+              add_typing_env h rdy TBool;
+              unify (translate_ty arg) (typing_a ~genv h a)
+          | _ -> assert false))
+  | S_assert(a,_) ->
+      let t = typing_a ~genv h a in
+      unify t TBool
+  | S_record_update(xdst,xsrc,x,a,t) ->
+      add_typing_env h xdst t;
+      add_typing_env h xsrc t;
+      let ta = typing_a ~genv h a in
+      unify ta (match t with
+                | TRecord(b_list) -> List.assoc x b_list
+                | _ -> assert false)
+
+(* typing of an fsm *)
+and typing_fsm h ~genv ~rdy ~result ~ty_result (ts,s) =
+  add_typing_env h rdy (TSig TBool);
+  add_typing_env h result ty_result;
+  typing_s ~genv ~result h s;
+  List.iter (fun (q,s) ->
+      typing_s ~genv ~result h s) ts
+
+
+let typing_error_handler f =
+  try
+    f ()
+  with CannotUnify(t1,t2) ->
+    let open Prelude.Errors in
+    error (fun fmt ->
+    Format.fprintf fmt "@,In the generated code, expression %a has type %a but an expression was expected of type %a"
+               (emph_pp purple Debug.pp_a) !trace_last_exp
+               (emph_pp green Debug.pp_ty) t1
+               (emph_pp green Debug.pp_ty) t2)
+
+
+let typing_circuit ~statics ~genv ty (rdy,result,fsm) =
+  Hashtbl.clear hashtbl_array_from_file;
+
+  typing_error_handler @@ fun () ->
+    let h = Hashtbl.create 64 in
+
+    List.iter (function 
+      | x,Static_array_of ty -> add_typing_env h x ty
+      | x,Static_array(c,n) -> add_typing_env h x (TStatic{elem=typing_c c;size=TSize n})
+          ) statics;
+
+
+    Hashtbl.iter (fun x _ -> 
+      (* to fill the array with content from a file, in simulation mode *)
+      (* ***************************************** *)
+      add_typing_env h ("$"^x^"_from_file") TBool;
+      add_typing_env h ("$"^x^"_file_name") (TString (new_tvar()))
+      (* ***************************************** *)
+    ) hashtbl_array_from_file;
+
+    let t1,t2 = match ty with Types.Ty_fun(t1,_,t2) -> t1,t2 | _ -> assert false (* err *)
+    in
+    typing_fsm h ~genv ~rdy ~result ~ty_result:(translate_tyB t2) fsm;
+
+
+    (* why two times ? *)
+    List.iter (function 
+      | x,Static_array_of ty -> add_typing_env h x ty
+      | x,Static_array(c,n) -> add_typing_env h x (TStatic{elem=typing_c c;size=TSize n})
+    ) statics;
+
+    add_typing_env h "argument" (translate_ty @@ Types.canon_ty t1);   (* NB: does not work without canon *)
+    add_typing_env h result (translate_tyB @@ Types.canon_tyB t2);
+
+    h

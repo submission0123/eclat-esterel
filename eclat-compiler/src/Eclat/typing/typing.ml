@@ -1,0 +1,1495 @@
+open Types
+open Ast
+
+let print_signature_flag = ref false
+
+let relax_flag = ref false
+
+let monomorphic = ref false
+
+let no_duration_check = ref false 
+  (** becomes [true] after initial typing
+      because it may be difficult to preserve welltypeness
+      across compilation passes
+      in presence of worst-case duration constraints **)
+
+
+let accept_ref_arg_flag = ref true (* see lambda-lifting.ml *)
+
+let rec pgcd a b =
+  if a < b then pgcd a (b-a) else
+  if a > b then pgcd b (a-b) else a
+
+let ppcm a b =
+  (a * b) / pgcd a b 
+
+exception PatTypeError
+
+type kind_error = 
+  Ty of ty * ty 
+| TyB of tyB * tyB 
+| Dur of dur * dur 
+| Size of size * size
+| Label of label * label
+| Imcompatible_length of ty * ty
+| Ty_TyB of ty * tyB
+| TyB_Ty of tyB * ty
+| Pat_ty of p * ty
+| AbstractTy_mismatch of x * x
+| Cyclic_Ty of int * ty
+| Cyclic_Dur of int * dur
+| Cyclic_Size of int * size
+| Cyclic_label of int * label
+| Missing_record_field of x
+| Record_field_mismatch of x * tyB * tyB
+
+exception CannotUnify of Prelude.loc * kind_error list
+
+exception Cyclic_size of int * size * Prelude.loc
+exception Cyclic_dur of int * dur * Prelude.loc
+exception Cyclic_ty of int * ty * Prelude.loc
+
+let rec unify_size ~loc sz1 sz2 =
+  let sz1, sz2 = canon_size sz1, canon_size sz2 in
+  (*Format.fprintf Format.std_formatter "-- ====> %a / %a\n"  pp_size  sz1  pp_size  sz2; 
+  *)match sz1, sz2 with
+  | sz1,Sz_var {contents=Is sz2}
+  | Sz_var {contents=Is sz1},sz2 -> unify_size ~loc sz1 sz2
+  | Sz_var {contents=Unknown({id=m;_} as r)},
+    Sz_var ({contents=(Unknown{id=n;name})} as v) ->
+      if n = m then () else
+      begin 
+        v := Is sz1;
+        (match r.name with None -> r.name <- name | _ -> ())
+      end
+  | Sz_var ({contents=(Unknown{id=n;_})} as r1),sz2 ->
+      if test_occur (occur_size n) sz2 then (
+        r1 := Is (Sz_lit 0);
+        unify_size ~loc sz2 (Sz_var r1)
+      ) else
+      r1 := Is sz2
+  | sz1,Sz_var ({contents=(Unknown{id=n;_})} as r2) ->
+      if test_occur (occur_size n) sz1 then (
+        r2 := Is (Sz_lit 0);
+        unify_size ~loc sz1 (Sz_var r2)
+      ) else
+      r2 := Is sz1
+  | Sz_lit n1, Sz_lit n2 ->
+      if n1 < 0 || n2 < 0 then
+        Prelude.Errors.error ~loc (fun fmt -> Format.fprintf fmt "type size should be positive")
+      else 
+        if n1 <> n2 then raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+  | Sz_add(sz,k),sz0 | sz0,Sz_add(sz,k) ->
+      assert (k <> 0);
+      (match sz0 with
+       | Sz_add(sz',n) -> (** case 1: [sz + k ~ sz' + n] **)
+          if k <= n then
+            let m = n-k in
+            unify_size ~loc sz (Sz_add(sz',m))
+          else
+            let m = k-n in
+            unify_size ~loc (Sz_add(sz,m)) sz'
+       | Sz_lit n -> (** case 2: [sz + k ~ n => n >= k && sz ~ n - k] **)
+          if n >= k then unify_size ~loc sz (Sz_lit (n-k))
+          else raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+       | Sz_mul(i,sz3) -> (** case 3: [sz + k ~ i * sz3] **)
+          assert (i mod 2 = 0); (* i is even *)
+          (match sz with
+           | Sz_mul(j,sz') -> (** case 3.1: [j * sz' + k ~ i * sz1] **)
+               assert (i <> 0);
+               assert (j <> 0);
+               if k mod 2 <> 0 then raise @@ CannotUnify(loc,[Size(sz1,sz2)]) else
+               unify_size ~loc (Sz_add(Sz_mul(i/2,sz3),k/2)) (Sz_add(sz,k/2))
+           | _ -> 
+             unify_size ~loc sz (Sz_add(sz0,-k)); (* require case 3.1 *)
+             let sz4 = Types.new_size_unknown() in
+             (** enforce [sz >= 0] **)
+             unify_size ~loc sz3 (Sz_add(sz4,if k mod i = 0 then k/i else (k+1)/i)))
+       | Sz_pow2(sz') -> 
+          (match sz with
+           | Sz_pow2(sz3) ->
+              (** decompose [n] into a sum of consecutive power of two: [sum(2^j) for j = k to i]
+                  where k is [floor(log2(n))],
+                  then unify sz with [k+1] and sz3 with i.
+                  For example: 2^X ~ 2^Y+3 = 2^X ~ 2^Y + (2^0 + 2^1) 
+                              => X = 1+1 and Y = 0 (i.e., 2^2 ~ 2^0 + 3) **)
+              let log2 n = 
+                let m0 = Float.log2 (float n) in
+                let m = Float.(floor @@ m0) in 
+                let rec loop n i =
+                  let n' = n -. (2. ** i) in
+                  if n' < 0. then None else
+                  if n' = 0. then Some (Float.to_int i,Float.to_int m) else
+                  loop n' (i -. 1.)
+                in loop (float n) m
+              in
+              if k >= 0 then
+              (match log2 k with
+              | None -> raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+              | Some (i,m) ->
+                    unify_size ~loc (Sz_lit (m+1)) sz';
+                    unify_size ~loc (Sz_lit (i)) sz3) else     
+              (match log2 (-k) with
+              | None -> raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+              | Some (i,m) ->
+                    unify_size ~loc (Sz_lit (m+1)) sz3;
+                    unify_size ~loc (Sz_lit (i)) sz')
+            | Sz_mul(m,sz3) ->
+               let logm = int_of_float @@ Float.floor @@ Float.log2 (float m) in
+               let i = k / m in
+               if (i * m <> k) || ((1 lsl logm) <> m) then 
+                  Prelude.Errors.error ~loc (fun fmt ->
+                    Format.fprintf fmt "doesn't know how to unify %a and %a\n" 
+                      pp_size sz1 pp_size sz2);
+               unify_size ~loc sz3 (Sz_add(Sz_pow2(Sz_add(sz',- logm)),-i))
+           | _ ->
+              if k mod 2 == 0 then (
+                let sz2 = Types.new_size_unknown() in
+                unify_size ~loc (Sz_mul(2,sz2)) sz;
+                unify_size ~loc (Sz_pow2(sz')) (Sz_mul (2,Sz_add(sz2,k/2))))
+              else
+               unify_size ~loc sz (Sz_add(Sz_pow2(sz'),-k)))
+       | Sz_var _ -> assert false (* handled in a previous case *))
+
+  | Sz_mul(k,sz),sz0 | sz0,Sz_mul(k,sz) ->
+      (match sz0 with
+       | Sz_lit n ->
+           if n mod k = 0 then unify_size ~loc sz (Sz_lit (n/k))
+           else raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+       | Sz_mul(m,sz') ->
+           if k mod 2 <> 0 || m mod 2 <> 0 
+           then raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+           else unify_size ~loc (Sz_mul(k/2,sz)) (Sz_mul(m/2,sz'))
+       | Sz_add _ -> assert false (* handled in a previous case *)
+       | Sz_pow2(sz') ->
+           (match sz with
+            | Sz_pow2(sz3) -> (** case W **)
+                let m = Float.floor @@ Float.log2 (float k) in
+                if (2. ** m) <> float k then raise @@ CannotUnify(loc,[Size(sz1,sz2)]) else
+                unify_size ~loc (Sz_pow2 sz') (Sz_pow2(Sz_add(sz3,Float.to_int m)))
+            | _ ->
+                let sz3 = Types.new_size_unknown() in
+                unify_size ~loc sz (Sz_pow2(sz3)) (* requires case W *)
+            )
+       | Sz_var _ -> assert false (* handled in a previous case *)
+     )
+  | Sz_pow2(sz),sz0 | sz0,Sz_pow2(sz) ->
+      (match sz0 with
+       | Sz_lit n ->
+          let k = int_of_float (Float.log2 (float n)) in
+          if (1 lsl k) == n then unify_size ~loc sz (Sz_lit k)
+          else raise @@ CannotUnify(loc,[Size(sz1,sz2)])
+       | Sz_pow2(sz') -> unify_size ~loc sz sz'
+       | Sz_add _ -> assert false (* handled in a previous case *)
+       | Sz_mul _ -> assert false (* handled in a previous case *)
+       | Sz_var _ -> assert false (* handled in a previous case *)
+      )
+
+let unify_dur ~loc d1_0 d2_0 =
+  let rec unify_d ~start d1 d2 =
+    if !no_duration_check then () else
+    let d1 = canon_dur d1 and d2 = canon_dur d2 in
+    (* Format.fprintf Format.std_formatter "[dur]-- ====> %a | %a\n"  pp_dur  d1  pp_dur  d2; *)
+    if d1 = d2 then () else
+    match d1,d2 with
+    | _,Dur_top -> ()
+    | Dur_var {contents=Unknown({id=m;_} as r)},
+      Dur_var ({contents=(Unknown{id=n;name})} as v) ->
+        if n = m then () else 
+          begin 
+            v := Is d1;
+            (match r.name with None -> r.name <- name | _ -> ());   
+          end
+    | _,Dur_var ({contents=Unknown{id=n;_}} as r2) ->
+        if test_occur (occur_dur n) d1 then raise (Cyclic_dur(n,d1,loc));
+        r2 := Is d1
+    | Dur_var ({contents=Unknown{id=n;_}} as r1),_ ->
+      if test_occur (occur_dur n) d2 then raise (Cyclic_dur(n,d2,loc));
+      r1 := Is d2
+    | Dur_top,_ -> raise @@ CannotUnify(loc,[Dur(d1_0,d2_0)])
+    | _ ->
+        let d1 = canon_dur @@ simpl_dur_wcet_with_rebase ~keep_sharing:true(*rebase_dur2*) d1 in
+        let d2 = canon_dur @@ simpl_dur_wcet_with_rebase (*rebase_dur2*) d2 in
+        if d1 = d2 then () else
+        (match d1,d2 with
+         | Dur_int m,Dur_int n -> if m <= n then () else raise @@ CannotUnify(loc,[Dur(d1_0,d2_0)])
+         | Dur_int 0,_ -> ()
+         | d,Dur_shared(_,dx) -> unify_d ~start d dx
+         | Dur_int n,(Dur_add(Dur_int m,_)) when n <= m -> ()
+         | Dur_int n,(Dur_add(_,Dur_int m)) when n <= m -> ()
+         | Dur_add(d1,Dur_int n), Dur_add(d2,Dur_int m) ->
+             if n = m then unify_d ~start d1 d2 else
+             if n > m then unify_d ~start (Dur_add(d1,Dur_int (n-m))) d2 else
+             unify_d ~start d1 (Dur_add(d2,Dur_int (m-n)))
+         | _,_ ->
+            let po_to_be_proven () =
+              Prelude.Errors.warning ~loc (fun fmt ->
+                  Prelude.Errors.(emph bold fmt "(PO) you must prove: ");
+                  Format.fprintf fmt "[%a <= %a]\n" pp_dur d1 pp_dur d2)
+            in
+            let continue_check () =
+              if start then (
+                  let f da db =
+                    try unify_d ~start:false da db with
+                    | _ -> Prelude.Errors.error ~loc (fun fmt ->
+                             Format.fprintf fmt "Expect %a <= %a.\nIt is not always true.\n" 
+                                pp_dur (rebase_duration d1) pp_dur (rebase_duration d2);
+                             Format.fprintf fmt "For example, %a > %a.\n" pp_dur da pp_dur db)
+                  in 
+                let ok = Types.Check_durations.check f d1 d2 in
+                if ok then () else po_to_be_proven())
+              else (
+                po_to_be_proven()
+              )
+            in
+            (match copy_dur d1, copy_dur d2 with
+             | Dur_add(d1,d1'),Dur_add(d2,d2') ->
+                (try unify_d ~start d1 d2;
+                     unify_d ~start d1' d2'
+                 with CannotUnify _ | Prelude.Errors.Caml_error ->
+                    (try unify_d ~start d1 d2';
+                         unify_d ~start d1' d2
+                     with CannotUnify _ | Prelude.Errors.Caml_error -> continue_check ()))
+             | Dur_mulDiv(sz1,d1,sz1'),Dur_mulDiv(sz2,d2,sz2') ->
+               (try unify_size ~loc sz1 sz2;
+                    unify_size ~loc sz1' sz2';
+                    unify_d ~start d1 d2
+                with CannotUnify _ | Prelude.Errors.Caml_error -> continue_check ())
+             | _ -> continue_check ()))
+  in
+  unify_d ~start:true d1_0 d2_0
+
+let rec unify_tyB ~loc tyB1 tyB2 =
+  let tyB1,tyB2 = canon_tyB tyB1, canon_tyB tyB2 in
+  (* Format.fprintf Format.std_formatter "&&      [tyB]====> %a / %a\n"  pp_tyB  tyB1  pp_tyB  tyB2;
+  *)match tyB1, tyB2 with
+  | TyB_var {contents=Unknown({id=m;_} as r)},
+    TyB_var ({contents=(Unknown{id=n;name})} as v) ->
+      if n = m then () else 
+        begin 
+          v := Is tyB1;
+          (match r.name with None -> r.name <- name | _ -> ());   
+        end
+  | TyB_var ({contents=(Unknown{id=n;_})} as r1),tyB2 ->
+      if test_occur (occur_tyB n) tyB2 then 
+        raise @@ CannotUnify(loc,(Cyclic_Ty(n,Ty_base tyB2))::[]);
+      r1 := Is tyB2
+  | tyB1,TyB_var ({contents=(Unknown{id=n;_})} as r2) ->
+      if test_occur (occur_tyB n) tyB1 then
+        raise @@ CannotUnify(loc,(Cyclic_Ty(n,Ty_base tyB1))::[]);
+      r2 := Is tyB1
+  | tyB1,TyB_var {contents=Is tyB2}
+  | TyB_var {contents=Is tyB1},tyB2 ->
+      unify_tyB ~loc tyB1 tyB2
+  | TyB_bool,TyB_bool
+  | TyB_unit,TyB_unit -> ()
+  | TyB_int sz1, TyB_int sz2 ->
+      (try unify_size ~loc sz1 sz2
+      with CannotUnify(_,l) ->
+        raise @@ CannotUnify(loc,(TyB(tyB1,tyB2))::l))
+  | TyB_string _, TyB_string _ -> ()
+  | TyB_abstract(x1,szs1,tyB_list1),TyB_abstract(x2,szs2,tyB_list2) ->
+      if x1 <> x2 then 
+        raise @@ CannotUnify(loc,(AbstractTy_mismatch(x1,x2))::[])
+      else if List.compare_lengths tyB_list1 tyB_list2 <> 0
+           || List.compare_lengths szs1 szs2 <> 0 then 
+        raise @@ CannotUnify(loc,(Imcompatible_length(Ty_base tyB1, Ty_base tyB2))::[])
+      else
+        (try List.iter2 (unify_size ~loc) szs1 szs2;
+             List.iter2 (unify_tyB ~loc) tyB_list1 tyB_list2
+         with CannotUnify(_,l) -> 
+                raise @@ CannotUnify(loc,(TyB(tyB1,tyB2))::l))
+  | TyB_tuple tyB_list1, TyB_tuple tyB_list2 ->
+      if List.compare_lengths tyB_list1 tyB_list2 <> 0 then
+        raise @@ CannotUnify(loc,(Imcompatible_length(Ty_base tyB1, Ty_base tyB2))::[]);
+      (try List.iter2 (unify_tyB ~loc) tyB_list1 tyB_list2 
+       with CannotUnify(_,l) ->
+              raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::l))
+  | TyB_sum(ctors),TyB_sum(ctors') ->
+      if List.compare_lengths ctors ctors' <> 0 then
+        raise @@ CannotUnify(loc,(Imcompatible_length(Ty_base tyB1, Ty_base tyB2))::[]);
+      List.iter2 (fun (x1,tyBi1) (x2,tyBi2) ->
+        if x1 <> x2 then raise @@ CannotUnify(loc,AbstractTy_mismatch(x1,x2)::[]);
+        (try unify_tyB ~loc tyBi1 tyBi2
+         with CannotUnify(_,l) ->
+                raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::l))) ctors ctors'
+  | TyB_record{fields=fs1;row=TyB_unit},
+    TyB_record{fields=fs2;row=TyB_unit} ->
+      SMap.iter (fun x tyB ->
+                  match SMap.find_opt x fs1 with
+                  | None -> raise @@ CannotUnify(loc,[TyB(tyB1,tyB2);Missing_record_field(x)])
+                  | Some tyB0 -> try unify_tyB ~loc tyB0 tyB with
+                                 | CannotUnify _ -> raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::Record_field_mismatch(x,tyB0,tyB)::[])
+                ) fs2;
+      if SMap.union (fun _ _ _ -> None) fs1 fs2 |> SMap.is_empty then () else
+        raise @@ CannotUnify(loc,[TyB(tyB1,tyB2)])
+  | TyB_record{fields=fs1;row=TyB_unit},
+    TyB_record{fields=fs2;row=r2} ->
+      SMap.iter (fun x tyB ->
+                    match SMap.find_opt x fs1 with
+                    | None -> raise @@ CannotUnify(loc,[TyB(tyB1,tyB2);Missing_record_field(x)])
+                    | Some tyB0 -> try unify_tyB ~loc tyB0 tyB with
+                                   | CannotUnify _ -> raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::Record_field_mismatch(x,tyB0,tyB)::[])
+                    ) fs2;
+      let acc = SMap.fold (fun x tyB acc ->
+                  match SMap.find_opt x fs2 with
+                  | None -> SMap.add x tyB acc
+                  | Some tyB0 -> (unify_tyB ~loc tyB0 tyB; acc)) fs1 SMap.empty in
+      unify_tyB ~loc r2 (TyB_record{fields=acc;row=TyB_unit})
+  | TyB_record{fields=fs1;row=r1},
+    TyB_record{fields=fs2;row=TyB_unit} ->
+      SMap.iter (fun x tyB ->
+                    match SMap.find_opt x fs2 with
+                    | None -> raise @@ CannotUnify(loc,[TyB(tyB1,tyB2);Missing_record_field(x)])
+                    | Some tyB0 -> try unify_tyB ~loc tyB0 tyB with
+                                   | CannotUnify _ -> raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::Record_field_mismatch(x,tyB0,tyB)::[])
+                    ) fs1;
+      let acc = SMap.fold (fun x tyB acc ->
+                  match SMap.find_opt x fs1 with
+                  | None -> SMap.add x tyB acc
+                  | Some tyB0 -> (try unify_tyB ~loc tyB0 tyB with
+                                  | CannotUnify _ ->
+                                      raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::Record_field_mismatch(x,tyB0,tyB)::[]));
+                                  acc) fs2 SMap.empty in
+      unify_tyB ~loc r1 (TyB_record{fields=acc;row=TyB_unit})
+  | TyB_record{fields=fs1;row=r1},
+    TyB_record{fields=fs2;row=r2} ->
+      let acc1 = SMap.fold (fun x tyB acc ->
+                  match SMap.find_opt x fs2 with
+                  | None -> SMap.add x tyB acc
+                  | Some tyB0 -> (try unify_tyB ~loc tyB0 tyB with
+                                  | CannotUnify _ ->
+                                      raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::Record_field_mismatch(x,tyB0,tyB)::[]));
+                                 acc) fs1 SMap.empty in
+      let acc2 = SMap.fold (fun x tyB acc ->
+                  match SMap.find_opt x fs1 with
+                  | None -> SMap.add x tyB acc
+                  | Some tyB0 -> (unify_tyB ~loc tyB0 tyB; acc)) fs2 SMap.empty in
+      unify_tyB ~loc r1 (TyB_record{fields=acc2;row=new_tyB_unknown ~name:"row" ()});
+      unify_tyB ~loc r2 (TyB_record{fields=acc1;row=new_tyB_unknown ~name:"row" ()})
+  | TyB_alias(x1,sz_list1,tyB_list1),TyB_alias(x2,sz_list2,tyB_list2) when x1 = x2 ->
+      List.iter2 (unify_size ~loc) sz_list1 sz_list2;
+      List.iter2 (unify_tyB ~loc) tyB_list1 tyB_list2
+  | tyB1,TyB_alias(x2,sz_list2,tyB_list2) ->
+      let tyB3 = Types.as_tyB ~loc @@ alias_instance x2 sz_list2 (List.map (fun t -> Ty_base t) tyB_list2) in
+      unify_tyB ~loc tyB1 tyB3
+  | TyB_alias(x1,sz_list1,tyB_list1),tyB2 ->
+      let tyB3 = Types.as_tyB ~loc @@ alias_instance x1 sz_list1 (List.map (fun t -> Ty_base t) tyB_list1) in
+      unify_tyB ~loc tyB3 tyB2
+  | _ -> raise @@ CannotUnify(loc,TyB(tyB1,tyB2)::[])
+
+let rec unify_label ~loc l1 l2 =
+  let l1,l2 = canon_label l1, canon_label l2 in
+  (* Format.fprintf Format.std_formatter "&&      [label]====> %a / %a\n"  pp_label  l1  pp_label  l2;
+  *)match l1, l2 with
+  | Label_var {contents=Unknown({id=m;_} as r)},
+    Label_var ({contents=(Unknown{id=n;name})} as v) ->
+      if n = m then () else 
+        begin 
+          v := Is l1;
+          (match r.name with None -> r.name <- name | _ -> ());   
+        end
+  | Label_var ({contents=(Unknown{id=n;_})} as r1),l2 ->
+      if test_occur (occur_label n) l2 then 
+        raise @@ CannotUnify(loc,(Cyclic_label(n,l2))::[]);
+      r1 := Is l2
+  | l1,Label_var ({contents=(Unknown{id=n;_})} as r2) ->
+      if test_occur (occur_label n) l1 then
+        raise @@ CannotUnify(loc,(Cyclic_label(n,l1))::[]);
+      r2 := Is l1
+  | l1,Label_var {contents=Is l2}
+  | Label_var {contents=Is l1},l2 ->
+      unify_label ~loc l1 l2
+  | Label_name x1, Label_name x2 ->
+      if !Prelude.Errors.no_warning && x1 <> x2 then 
+          Prelude.Errors.error ~loc (fun fmt ->
+            Format.fprintf fmt "loss of sharing in WCET analysis;\nthis may cause an underestimation of the execution time\n")
+      (* raise (CannotUnify(loc,[Label(l1,l2)])) *)
+  
+
+(** unify actual type ty1 and expected type ty2;
+    raise an exception [CannotUnify_ty(loc,ty1,ty2)]
+    if both types are incompatible, while ensuring [loc] 
+    is the location of an expression of type [ty2]. *)
+let unify_ty ~loc ty1 ty2 =
+  let ty1,ty2 = canon_ty ty1, canon_ty ty2 in
+  let rec unify ~loc ty1 ty2 =
+    let ty1,ty2 = canon_ty ty1, canon_ty ty2 in
+     (* Format.fprintf Format.std_formatter "          [ty]====> %a / %a\n"  pp_ty  ty1  pp_ty  ty2;
+     *)match ty1,ty2 with
+    | Ty_var {contents=Unknown({id=m;_} as r)},
+      Ty_var ({contents=(Unknown{id=n;name})} as v) ->
+        if n = m then () else 
+          begin 
+            v := Is ty1;
+            (match r.name with None -> r.name <- name | _ -> ());   
+          end
+    | (Ty_base(TyB_var {contents=Unknown u}),
+       Ty_var ({contents=Unknown{id=m;name}} as v)) ->
+        if u.id = m then () else
+          begin
+            v := Is ty1;
+            (match u.name with None -> u.name <- name | _ -> ())
+          end
+    | (Ty_var ({contents=Unknown{id=m;name}} as v),
+       Ty_base(TyB_var {contents=Unknown u})) ->
+        if m = u.id then () else
+          begin
+            v := Is ty2;
+            (match u.name with None -> u.name <- name | _ -> ())
+          end
+    | Ty_var ({contents=(Unknown{id=n;_})} as r1),ty2 ->
+        if test_occur (occur_ty n) ty2 then
+          raise @@ CannotUnify(loc,(Cyclic_Ty(n,ty2))::[]);
+        r1 := Is ty2
+    | ty1,Ty_var ({contents=(Unknown{id=n;_})} as r2) ->
+        if test_occur (occur_ty n) ty1 then
+          raise @@ CannotUnify(loc,(Cyclic_Ty(n,ty1))::[]);
+        r2 := Is ty1
+    | Ty_base tyB1, Ty_base tyB2 ->
+        unify_tyB ~loc tyB1 tyB2
+    | Ty_tuple ty_list1, Ty_tuple ty_list2 ->
+        if List.compare_lengths ty_list1 ty_list2 <> 0 then
+          raise @@ CannotUnify(loc,(Imcompatible_length(ty1, ty2))::[]);
+        List.iter2 (unify ~loc) ty_list1 ty_list2
+    | Ty_fun(ty1,d1,tyB1),Ty_fun(ty2,d2,tyB2) ->
+        unify ~loc ty1 ty2;
+        unify_dur ~loc d1 d2;
+        unify_tyB ~loc tyB1 tyB2
+    | Ty_ref(tyB1),Ty_ref(tyB2) ->
+        unify_tyB ~loc tyB1 tyB2 
+    | Ty_array(sz1,tyB1,l1),Ty_array(sz2,tyB2,l2) ->
+        unify_size ~loc sz1 sz2;
+        unify_tyB ~loc tyB1 tyB2;
+        unify_label ~loc l1 l2
+    | Ty_signal(tyB1),Ty_signal(tyB2) ->
+        unify_tyB ~loc tyB1 tyB2
+    | Ty_trap(tyB1),Ty_trap(tyB2) ->
+        unify_tyB ~loc tyB1 tyB2
+    | Ty_alias(x1,sz_list1,ty_list1),Ty_alias(x2,sz_list2,ty_list2) when x1 = x2 ->
+        List.iter2 (unify_size ~loc) sz_list1 sz_list2;
+        List.iter2 (unify ~loc) ty_list1 ty_list2
+    | ty1,Ty_alias(x2,sz_list2,ty_list2) ->
+        let ty3 = alias_instance ~loc x2 sz_list2 ty_list2 in
+        (match canon_ty ty3 with
+        | Ty_base tyB -> 
+            unify ~loc ty1 (Ty_base (TyB_alias(x2,sz_list2,List.map (as_tyB ~loc) ty_list2)))
+        | _ -> unify ~loc ty1 ty3)
+    | Ty_alias(x1,sz_list1,ty_list1),ty2 ->
+        let ty3 = alias_instance ~loc x1 sz_list1 ty_list1 in
+        (match canon_ty ty3 with
+        | Ty_base tyB -> 
+            unify ~loc (Ty_base (TyB_alias(x1,sz_list1,List.map (as_tyB ~loc) ty_list1))) ty2
+        | _ -> unify ~loc ty3 ty2)
+
+    | Ty_base tyB1, Ty_tuple ty_list2 ->
+        let tyB_list2 = List.map (fun ty -> 
+                          let v = new_tyB_unknown () in
+                          unify ~loc ty (Ty_base v); v) ty_list2 in
+        unify_tyB ~loc tyB1 (TyB_tuple tyB_list2)
+    | Ty_tuple ty_list1,Ty_base tyB2 ->
+        let tyB_list1 = List.map (fun ty -> 
+                          let v = new_tyB_unknown () in
+                          unify ~loc ty (Ty_base v); v) ty_list1 in
+        unify_tyB ~loc (TyB_tuple tyB_list1) tyB2
+    | Ty_base tyB1,_ ->
+        raise @@ CannotUnify(loc,(TyB_Ty(tyB1,ty2))::[]);
+    | _,Ty_base tyB2 ->
+        raise @@ CannotUnify(loc,(Ty_TyB(ty1,tyB2))::[]);
+    | Ty_size sz1, Ty_size sz2 -> 
+        (try unify_size ~loc sz1 sz2
+         with CannotUnify(_,l) ->
+                raise @@ CannotUnify(loc,Ty(ty1,ty2)::l))
+    | _ ->  raise @@ CannotUnify(loc,(Ty(ty1,ty2))::[]);
+  in
+  try unify ~loc ty1 ty2 with
+  | CannotUnify(loc0,l) ->
+      if loc = loc0 then raise @@ CannotUnify(loc,l) 
+      else raise @@ CannotUnify(loc,(Ty(ty1,ty2))::l);
+  | Cyclic_ty(n,_,_)
+  | Cyclic_dur(n,_,_)
+  | Cyclic_size(n,_,_) ->
+      raise @@ Cyclic_ty(n,ty1,loc)
+
+let ty_bindings ~loc p ty =
+  let rec ty_bindings_aux ~loc p ty = 
+    match p,canon_ty ty with
+    | P_var x,t -> SMap.singleton x t
+    | P_tuple ps,Ty_tuple ts ->
+        if List.compare_lengths ps ts <> 0 then
+          let _ts_found = List.map (fun _ -> new_ty_unknown ()) ps in
+          raise @@ CannotUnify(loc,Imcompatible_length(Ty_tuple _ts_found, ty)::[])
+        else
+          List.fold_left2 (fun m p t -> ty_bindings_aux ~loc p t ++ m) SMap.empty ps ts
+    | P_unit,ty ->
+        unify_ty ~loc ty (Ty_base TyB_unit);
+        SMap.empty
+    | P_tuple ps,ty ->
+        let ty_list = List.map (fun _ -> new_ty_unknown ()) ps in
+        unify_ty ~loc ty (Ty_tuple ty_list); (* todo: fix loc *)
+        List.fold_left2 (fun m p t -> 
+                           ty_bindings_aux ~loc p t ++ m
+          ) SMap.empty ps ty_list
+    | P_tyConstr(p,ty'),ty -> 
+        unify_ty ~loc ty ty'; (* todo: fix loc *)
+        ty_bindings_aux ~loc p ty'
+        (* ty' is more precise  ~~~
+           e.g.: [type t = int; let (x:t) = 5;; ~> val x : t] *)
+  in
+  try ty_bindings_aux ~loc p ty with
+  | CannotUnify(loc0,l) ->
+      raise @@ CannotUnify(loc,(Pat_ty (p,ty))::l)
+
+let env_extend ~loc ?(gen=false) g p scm = (* scm: scheme or type ?? *)
+  (* Format.(fprintf std_formatter "~~~~~%a/%b\n") Ast_pprint.pp_pat p gen; *)
+  g ++ SMap.map (fun t ->
+      let scm = if gen then generalize (SMap.bindings g) t
+        else Forall(Vs.empty,t) in
+      scm) (ty_bindings ~loc p scm)
+
+exception UnboundVariable of x * Prelude.loc
+
+let error_unbound_constructor ~loc ctor =
+  Prelude.Errors.error ~loc (fun fmt -> Format.fprintf fmt "Unbound constructor %s" ctor)
+
+let typ_ident ~loc g x =
+  match SMap.find_opt x g with
+  | None -> raise (UnboundVariable (x,loc))
+  | Some t -> instance t
+
+let group_tyB_list = function
+  | [] -> TyB_unit
+  | [tyB] -> tyB
+  | tyB_list -> TyB_tuple tyB_list
+
+let ty_op ~genv ~loc op =
+  let ty = 
+    match op with
+    | Runtime(p) ->
+        Operators.ty_op ~externals:genv.operators p
+    | TyConstr ty -> assert false 
+        (* todo : put [(e:t)] in the expression language *)
+    | GetTuple _ -> assert false (* {pos;arity} ->
+      let ty_list = List.init arity (fun _ -> new_ty_unknown ()) in
+      assert (0 <= pos && pos <= arity);
+      let tyB = new_tyB_unknown () in
+      unify_ty ~loc (Ty_base tyB) (List.nth ty_list pos);
+      Ty_fun(Ty_tuple ty_list,
+             Dur_zero,
+             tyB) *)
+    | Int_of_size _ ->
+        Ty_fun(Ty_size (new_size_unknown ~name:"size" ()),Dur_int 0, TyB_int (new_size_unknown ~name:"int_size" ()))
+  in
+  let ty1 = new_ty_unknown () in
+  let tyB2 = new_tyB_unknown () in
+  unify_ty ~loc ty (Ty_fun(ty1,Dur_int 0,tyB2));
+  ty
+
+let sum_instance ~loc ctors x =
+  let xt = match SMap.find_opt x ctors with
+           | Some xt -> xt
+           | None -> error_unbound_constructor ~loc x in
+  (match Hashtbl.find_opt global_type_declarations xt with
+  | None | Some (Abstract _) -> assert false
+  | Some (Alias ((ty,szx_list,tyx_list),_)) ->
+     let sz_list' = List.map (fun x -> new_size_unknown ~name:x ()) szx_list in
+     let tyB_list' = List.map (fun x -> new_tyB_unknown ~name:x ()) tyx_list in
+     let ty_list' = List.map (fun tyB -> Ty_base tyB) tyB_list' in
+     let tyB = match as_tyB ~loc @@ alias_instance ~loc xt sz_list' ty_list' with
+               | TyB_sum(ctors) -> List.assoc x ctors
+               | _ -> assert false
+     in
+     tyB, TyB_alias(xt,sz_list',tyB_list'))
+
+let rec type_annotation_from_pat ~loc (p:p) : ty =
+  match p with
+  | P_unit ->
+      Ty_base TyB_unit
+  | P_var _ ->
+      new_ty_unknown ()
+  | P_tuple ps ->
+      Ty_tuple (List.map (type_annotation_from_pat ~loc) ps)
+  | P_tyConstr(p,ty) ->
+      let ty' = type_annotation_from_pat ~loc p in (* todo: fix loc of p *)
+      unify_ty ~loc ty' ty; 
+      ty
+
+let rec typ_const ~loc ~ctors = function
+  | Int(n,sz) -> TyB_int sz
+  | Bool _ -> TyB_bool
+  | Unit -> TyB_unit
+  | Char _ -> Operators.char_
+  | String s ->
+      TyB_string (Sz_lit (String.length s))
+  | C_tuple(cs) ->
+      TyB_tuple(List.map (typ_const ~loc ~ctors) cs)
+  | C_vector(cs) ->
+      let v = new_tyB_unknown () in
+      List.iter (fun c -> 
+                  unify_tyB ~loc v (typ_const ~loc ~ctors c)
+          ) cs;
+      Operators.vect_ (Sz_lit (List.length cs)) v
+  | C_size _ -> assert false
+  | C_appInj(x,c,tyB) ->
+      let tyB_arg,tyB = sum_instance ~loc ctors x in
+      let tc = typ_const ~loc ~ctors c in (* todo: loc of c *)
+      unify_tyB ~loc tyB_arg tc;
+      tyB
+  | Inj _ -> assert false (* to remove from constants *)
+  | Ref | Get | Set -> 
+     Prelude.Errors.error ~loc (fun fmt ->
+        Format.fprintf fmt "partial application of `ref` is ill typed.")
+  | _ -> assert false
+
+let rec typ_exp ?(collect_sig=false) ~statics ~genv ~ctors ?(toplevel=false) ~loc g e =
+  match e with
+  | E_const (Op (Runtime(External_fun(x,tyx)))) ->
+      let t = typ_ident ~loc g x in
+      unify_ty ~loc tyx (Types.copy_ty t);
+      tyx, Dur_int 0
+  | E_app(E_const (Op(GetTuple{pos;arity})),e1) ->
+      let ty_list = List.init arity (fun _ -> new_ty_unknown ()) in
+      assert (0 <= pos && pos <= arity);
+      let t1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                         ~toplevel ~loc g e1 in
+      unify_ty ~loc:(loc_of e1) t1 (Ty_tuple ty_list);
+      List.nth ty_list pos,d1
+  | E_const (Op op) -> 
+      let t = ty_op ~genv ~loc op in
+      t,Dur_int 0
+  | E_const(Inj x) -> (* Prelude.Errors.warning ~loc (fun fmt -> ()); *)
+      let tyB_arg,tyB = sum_instance ~loc ctors x in
+      (Ty_fun(Ty_base tyB_arg,Dur_int 0, tyB), Dur_int 0)
+  | E_const (C_size sz) -> 
+      (Ty_size sz, Dur_int 0)
+  | E_const c ->
+      (Ty_base (typ_const ~loc ~ctors c), Dur_int 0)
+  | E_var(x) ->
+      (* lookup *)
+      let tx = typ_ident ~loc g x in
+      (tx,Dur_int 0)
+  | E_deco(e1,loc) ->
+      typ_exp ~collect_sig ~statics ~genv ~ctors ~toplevel ~loc g e1
+  | E_if(e1,e2,e3) ->
+      let t1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let t2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e2) g e2 in
+      let t3,d3 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e3) g e3 in
+      unify_ty ~loc:(loc_of e1) t1 (Ty_base TyB_bool);
+      let vTyB = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e2) t2 (Ty_base vTyB);
+      unify_ty ~loc:(loc_of e3) t3 (Ty_base vTyB);
+      t2,Dur_add(d1,Dur_xor(d2,d3))
+  | E_case(e1,hs,e_els) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      List.iter (fun (cs,_) ->
+                  List.iter (fun c ->
+                              unify_ty ~loc (Ty_base (typ_const ~loc ~ctors c)) ty1
+                      ) cs
+      ) hs; (* todo: loc *)
+      let ty_els,d_els = typ_exp ~collect_sig ~statics ~genv ~ctors
+                                 ~toplevel:false ~loc:(loc_of e_els) g e_els in
+      let d_list = List.map (fun (_,ei) ->
+          let ty,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                             ~toplevel:false ~loc:(loc_of ei) g ei in
+          unify_ty ~loc:(loc_of ei) ty_els ty; d) hs
+      in
+      let d = List.fold_left (fun d1 d2 -> Dur_xor(d1,d2)) d_els d_list in
+      ty_els,Dur_add(d,d1)
+  | E_letIn(p,typ,e1,e2) ->
+      (* Format.fprintf Format.std_formatter "--->(%a : %a)\n" Ast_pprint.pp_exp (Pattern.pat2exp p) Types.pp_ty  typ;*)
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc:(loc_of e1) ty1 typ;
+      let gen = evaluated e1 (* && match un_annot e1 with E_fun _ | E_fix _ -> true | _ -> false *) in
+      let g' = env_extend ~loc:(loc_of e1) ~gen g p typ in (* todo: loc of pattern *)
+      (if toplevel && !print_signature_flag then (
+         let open Prelude.Errors in
+         let open Format in
+         (* if not (evaluated e1 || is_variable e1) then begin
+            error ~loc (fun fmt ->
+               fprintf fmt "Toplevel declarations like";
+               let xs = vars_of_p p in
+               pp_print_list
+                 ~pp_sep:(fun fmt () -> fprintf fmt ",")
+                 (fun fmt (x,_) -> fprintf fmt " %s" x) fmt (SMap.bindings xs);
+               fprintf fmt " should be values or variables."
+             ) end; *)
+         let open Prelude.Errors in
+         let open Format in
+         let xs = vars_of_p p in
+         fprintf std_formatter "@[<v>";
+         SMap.iter (fun x _ ->
+             Prelude.Errors.(emph bold std_formatter "val");
+             let d1' = simpl_dur_wcet_with_rebase ~keep_sharing:true d1 in
+             fprintf std_formatter " %s : " x;
+             let (Forall(vs,tyx)) = SMap.find x g' in
+             pp_scheme std_formatter @@ Forall(vs,tyx);
+             fprintf std_formatter " | %a"
+               pp_dur (canon_dur d1')
+           ) xs;
+           fprintf std_formatter "@]@."
+      ));
+      let ty2,d2 = typ_exp ~collect_sig ~statics 
+                            ~genv ~ctors
+                            ~toplevel ~loc:(loc_of e2) g' e2 in
+      (* let d2' = match canon_ty ty1 with
+                | Ty_array(_,_,Label_name y) -> hide (SMap.singleton y ()) d2
+                | _ -> d2 in *)
+      (* let d2' = if is_tyB ty2 then d2 else hide (vars_of_p p) (*simpl_dur_wcet ~keep_sharing:true*) d2 in
+      *)
+      let d2' = d2 in (ty2, Dur_add(d1,d2'))
+  | E_tuple(es) ->
+      let ts,ds = List.split @@ List.map (fun ei ->
+        typ_exp ~collect_sig ~statics ~genv ~ctors
+          ~toplevel:false ~loc:(loc_of ei) g ei) es in
+      let d = List.fold_left (fun d1 d2 -> Dur_add(d1,d2)) (Dur_int 0) ds in
+      Ty_tuple ts,d
+  | E_fun(p,(ty,tyB),e1) ->
+      let g' = env_extend ~loc g p ty in (* todo: loc of pattern *)
+      let ty1,dur = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                            ~toplevel:false ~loc:(loc_of e1) g' e1 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base tyB);
+      (* Format.(fprintf std_formatter "~~~~~~>%a\n" pp_dur dur); *)
+      (* let dur' = if is_tyB ty then dur else hide (vars_of_p p) dur in*)
+      let dur' = dur in
+      let dur' = simpl_dur_wcet_with_rebase ~keep_sharing:false dur' in   (* todo: à remettre, simpl_dur_wcet et hide *)
+      (Ty_fun(ty,(*canon_dur *)dur',tyB), Dur_int 0)
+  | E_fix(f,(p,(ty,tyB),e1)) ->
+      let vd = new_dur_unknown () in
+      let tf = Ty_fun(ty,Dur_top,tyB) in
+      let g' = env_extend ~loc g (P_var f) tf in
+      let g' = env_extend ~loc g' p ty in (* todo: precise loc *)
+      let ty1,d = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                          ~toplevel:false ~loc:(loc_of e1) g' e1 in
+              (* Format.(fprintf std_formatter "=========>%a\n" pp_dur d);*)
+      unify_dur ~loc:(loc_of e1) d vd;
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base tyB);
+      let vd' = simpl_dur_wcet_with_rebase ~keep_sharing:false vd in
+      (Ty_fun(ty,Dur_add(vd',Dur_int 1),tyB), (Dur_int 0))
+  | E_app(e1,e2) ->
+      (match un_deco e1 with
+       | E_const (Op (TyConstr ty)) ->
+           let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                                ~toplevel g ~loc:(loc_of e2) e2 in
+           unify_ty ~loc:(loc_of e2) ty2 ty;
+           ty,d2 (** [e2] has the type of its annotation, 
+                     e.g.: [type t = int;; let x = (5:t);; ~> val x : t],
+                     however, [ty] is less precise with respect to the
+                     subtyping relation for duration, e.g.,
+                     ((fun x -> pause()) : unit -[42]-> unit) is well typed
+                     but not ((fun x -> pause()) : unit -[0]-> unit) **)
+       | _ ->
+         let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                              ~toplevel:false g ~loc:(loc_of e1) e1 in
+         
+         let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                              ~toplevel:false g ~loc:(loc_of e2) e2 in
+         let tyB = new_tyB_unknown () in
+         let d = new_dur_unknown () in
+         let ty_arg = new_ty_unknown () in
+         unify_ty ~loc:(loc_of e1) ty1 (Ty_fun(ty_arg,d,tyB));
+
+         unify_ty ~loc:(loc_of e2) ty2 ty_arg; (** [ty2] is a subtype of [ty_arg],
+                                                   this matters if durations (functional types) 
+                                                   occur in ty2 **)
+         Ty_base tyB, canon_dur (Dur_add(Dur_add(d1,d2),d)))
+  | E_par(_,es) ->
+      let ts,ds = List.split @@ List.map (fun ei ->
+                                typ_exp ~collect_sig
+                                        ~statics ~genv
+                                        ~ctors ~toplevel:false
+                                        ~loc:(loc_of ei) g ei) es in
+      (* let d = match List.rev ds with
+              | d::ds' -> List.fold_left (fun d1 d2 -> Dur_max(d1,d2)) d (List.rev ds')
+              | [] -> Dur_int 0 *)
+      let d = match ds with
+              | d::ds' -> List.fold_left (fun d1 d2 -> Dur_max(d1,d2)) d ds'
+              | [] -> Dur_int 0
+      in Ty_tuple ts,canon_dur d
+  | E_reg((p,tyB,e1),e0,_) ->
+      let ty0,d0 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc g e0 in
+      let g' = env_extend ~loc g p ty0 in
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc g' e1 in
+      unify_ty ~loc ty0 ty1;
+      unify_dur ~loc:(loc_of e0) d0 (Dur_int 0);
+      unify_ty ~loc:(loc_of e0) (Ty_base tyB) ty0;
+      (ty0, d1)
+  | E_exec(e1,e2,eo,_) ->
+      let ty1,_ = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc g e2 in
+      unify_ty ~loc:(loc_of e1) ty1 ty2;
+      unify_dur ~loc:(loc_of e2) d2 (Dur_int 0);
+      let tyB = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) (Ty_base tyB) ty1;
+      Option.iter (fun e3 ->
+          let ty3,d3 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                               ~toplevel:false ~loc g e3 in
+          let loc_e3 = loc_of e3 in
+          unify_ty ~loc:loc_e3 ty3 (Ty_base (TyB_bool));
+          unify_dur ~loc:loc_e3 d3 (Dur_int 0)) eo;
+      (Ty_base (TyB_tuple[tyB;TyB_bool]), Dur_int 0)
+  | E_match(e1,hs,eo) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let x_witness = match hs with
+                      | (x,_)::_ -> x 
+                      | _ -> assert false (* should not happen *) 
+      in
+      let xt = match SMap.find_opt x_witness ctors with
+                    | Some xt -> xt
+                    | None -> error_unbound_constructor ~loc x_witness in
+      let ctors_2 = 
+        match Hashtbl.find_opt global_type_declarations xt with
+        | None | Some (Abstract _) -> assert false
+        | Some (Alias ((tyB,szx_list,tyx_list),_)) ->
+            let sz_list' = List.map (fun x -> new_size_unknown ~name:x ()) szx_list in
+            let tyB_list' = List.map (fun x -> new_tyB_unknown ~name:x ()) tyx_list in
+            let ty_list' = List.map (fun tyB -> Ty_base tyB) tyB_list' in
+            unify_ty ~loc:(loc_of e1) ty1 (Ty_base (TyB_alias(xt,sz_list',tyB_list')));
+            match Types.as_tyB ~loc @@ alias_instance xt sz_list' ty_list' with
+            | TyB_sum(ctors) -> SMap.of_seq (List.to_seq ctors)
+            | _ -> assert false
+      in
+      let ty_result = (Ty_base (new_tyB_unknown ())) in
+      let r = ref (Dur_int 0) in
+      List.iter (fun (inj,(p,ei)) ->
+          let loc_of_ie = loc_of ei in
+          let typ_param = match SMap.find_opt inj ctors_2 with
+                          | Some tyB_inj -> Ty_base tyB_inj
+                          | None -> error_unbound_constructor ~loc inj
+          in
+          let g' = env_extend ~loc:loc_of_ie g p typ_param in
+          let tyi,di = typ_exp ~collect_sig ~statics ~genv ~ctors
+                               ~toplevel:false ~loc:(loc_of ei) g' ei in
+          unify_ty ~loc:loc_of_ie tyi ty_result;
+          r := Dur_xor(!r,di)) hs;
+
+      Option.iter (fun ew -> 
+          (* wildcard clause *)
+          let tyw,dw = typ_exp ~collect_sig ~statics ~genv ~ctors
+                               ~toplevel:false ~loc:(loc_of ew) g ew in
+          unify_ty ~loc:(loc_of ew) tyw ty_result;
+          r := Dur_xor(!r,dw)) eo;
+
+      if eo = None && List.length hs < (SMap.cardinal ctors_2) then (
+        Prelude.Errors.error ~loc (fun fmt ->
+            Format.fprintf fmt "This pattern matching is not exhaustive.")
+      );
+      ty_result,Dur_add(d1,!r)
+  | E_record(b_list) ->
+      let bs,ns = List.split @@ List.map (fun (x,ei) ->
+                    let (t,n) = typ_exp ~collect_sig ~statics ~genv ~ctors
+                                  ~toplevel:false ~loc:(loc_of ei) g ei in
+                    let tyB = new_tyB_unknown () in
+                    unify_ty ~loc:(loc_of ei) t (Ty_base tyB);
+                    (x,tyB),n) b_list
+      in
+      let n = List.fold_left (fun acc n -> Dur_add(acc,n)) (Dur_int 0) ns in
+      Ty_base(TyB_record{fields=smap_of_list bs;row=TyB_unit}),n
+  | E_record_field(e1,x,t) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let tyB = new_tyB_unknown () in
+      let v = new_tyB_unknown ~name:"row" () in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base(TyB_record{fields=SMap.singleton x tyB;row=v}));
+      unify_ty ~loc:(loc_of e1) (Ty_base t) ty1;
+      Ty_base tyB,d1
+  | E_record_update(e1,x2,e2,t) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e2) g e2 in
+      let tyB1 = new_tyB_unknown ~name:"row" () in
+      let tyB2 = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base(TyB_record{fields=SMap.singleton x2 tyB2;row=tyB1}));
+      unify_ty ~loc:(loc_of e2) ty2 (Ty_base tyB2);
+      unify_ty ~loc:(loc_of e1) (Ty_base t) ty1;
+      ty1, Dur_add(d1,d2)
+  | E_ref(e1) ->
+      let ty,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                         ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let tyB = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) (Ty_base tyB) ty;
+      (Ty_ref(tyB),d)
+  | E_get(e1) ->
+      let ty1,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let tyB = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) (Ty_ref tyB) ty1;
+      (Ty_base tyB, d) (* Dur_max(d,Dur_one)) *)
+  | E_set (e1,e2) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e2) g e2 in
+      let tyB = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) (Ty_ref tyB) ty1;
+      unify_ty ~loc:(loc_of e2) (Ty_base tyB) ty2;
+      (Ty_base TyB_unit, Dur_add(d1,d2))
+  | E_array_make(sz,e1,_) ->
+      let tyB = new_tyB_unknown() in
+      let l = Ast.gensym ~prefix:"l" () in
+      let ty1,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base tyB);
+      (Ty_array(sz,tyB,Label_name l)),Dur_int 1
+  | E_array_create(sz,(l,_)) ->
+      let tyB = new_tyB_unknown() in
+      (* let l = Ast.gensym ~prefix:"l" () in *)
+      (Ty_array(sz,tyB,Label_name l)),Dur_int 0
+  | E_array_length(x,loc_x) ->
+      let tyx = typ_ident ~loc:loc_x g x in
+      let sz = new_size_unknown () in
+      let v = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:loc_x (Ty_array(sz,v,l)) tyx;
+      (Ty_base (TyB_int (new_size_unknown ())), Dur_int 0)
+  | E_array_get((x,loc_x),e1) ->
+      let ty1,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc g e1 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base (TyB_int (new_size_unknown ())));
+      let tyx = typ_ident ~loc:loc_x g x in
+      let tyB = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:loc_x (Ty_array(new_size_unknown(),tyB,l)) tyx; 
+      (* Format.fprintf Format.std_formatter "====>%a %a\n" pp_ty tyx pp_label l; *)
+      (Ty_base tyB,Dur_add(d,Dur_shared(l,Dur_int 1)))
+  | E_array_set((x,loc_x),e1,e2) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e2) g e2 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base (TyB_int (new_size_unknown ())));
+      let tyx = typ_ident ~loc:loc_x g x in
+      let tyB = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:(loc_of e2) ty2 (Ty_base tyB);
+      unify_ty ~loc:loc_x (Ty_array(new_size_unknown(),tyB,l)) tyx;
+      (Ty_base TyB_unit, Dur_add(Dur_add(d1,d2),Dur_shared (canon_label l,Dur_int 1)))
+  | E_array_get_start((x,loc_x),e1) ->
+      let ty1,d = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc ty1 (Ty_base (TyB_int (new_size_unknown ())));
+      let tyx = typ_ident ~loc:loc_x g x in
+      let tyB = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:loc_x (Ty_array(new_size_unknown(),tyB,l)) tyx;
+      (Ty_base TyB_unit, d)
+  | E_array_get_end(x,loc_x) ->
+      let tyx = typ_ident ~loc:loc_x g x in
+      let tyB = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:loc_x (Ty_array(new_size_unknown(),tyB,l)) tyx;
+      (Ty_base tyB, Dur_int 0)
+  | E_array_set_immediate((x,loc_x),e1,e2) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e2) g e2 in
+      unify_ty ~loc ty1 (Ty_base (TyB_int (new_size_unknown ())));
+      let tyx = typ_ident ~loc:loc_x g x in
+      let tyB = new_tyB_unknown () in
+      let l = new_label_unknown() in
+      unify_ty ~loc:(loc_of e2) ty2 (Ty_base tyB);
+      unify_ty ~loc:loc_x (Ty_array(new_size_unknown(),tyB,l)) tyx;
+      (Ty_base TyB_unit, (Dur_max(d1,d2)))
+  | E_array_from_file(x,e1) ->
+      let tyx = typ_ident ~loc g x in (* todo loc of x *)
+      let ty1,_d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                            ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let l = Ast.gensym ~prefix:"l" () in
+      unify_ty ~loc:(loc_of e1) (Ty_base(TyB_string(new_size_unknown()))) ty1;
+      unify_ty ~loc (Ty_array(new_size_unknown(),new_tyB_unknown(),Label_name l)) tyx; (* todo loc of x *)
+      (Ty_base TyB_unit, Dur_int 1)
+  | E_for(x,e1,e2,e3,s,loc) ->
+      let vsize = new_size_unknown () in
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                        ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                        ~toplevel:false ~loc:(loc_of e2) g e2 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base (TyB_int (Sz_add(vsize,1))));
+      unify_ty ~loc:(loc_of e2) ty2 (Ty_base (TyB_int (Sz_add(vsize,1))));
+      let g' = env_extend ~loc g (P_var x) (Ty_base (TyB_int (Sz_add(vsize,1)))) in
+      let ty3,d3 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                            ~toplevel:false ~loc:(loc_of e3) g' e3 in
+      unify_ty ~loc:(loc_of e3) ty3 (Ty_base TyB_unit);
+      
+      let eval_static e =
+        let loc = loc_of e in
+        let exception Cannot_evaluate_size in
+        let rec aux e =
+          let add e1 e2 =
+            let sz1 = aux e1 in
+            let sz2 = aux e2 in
+            match sz2 with
+            | Sz_lit n -> Sz_add(sz1,n)
+            | _ -> raise Cannot_evaluate_size
+          in
+          let sub e1 e2 =
+            let sz1 = aux e1 in
+            let sz2 = aux e2 in
+            match sz2 with
+            | Sz_lit n ->
+                let sz1_minus_n = new_size_unknown() in
+                unify_size ~loc sz1 (Sz_add(sz1_minus_n,n));
+                sz1_minus_n
+            | _ -> raise Cannot_evaluate_size
+          in
+          let mul e1 e2 =
+            let sz1 = aux e1 in
+            let sz2 = aux e2 in
+            match sz1 with
+            | Sz_lit 0 -> sz1
+            | Sz_lit n -> let rec loop(n) = 
+                            if n = 1 then sz2 else
+                            if n mod 2 = 0 then Sz_mul(2,loop(n/2))
+                            else raise Cannot_evaluate_size
+                          in loop(n)
+            | _ -> raise Cannot_evaluate_size
+          in
+          match e with
+          | E_const(Int(n,_)) -> Sz_lit n
+          | E_app(E_const(Op(Int_of_size _)),E_var z) ->
+              let tyx = typ_ident ~loc g z in
+              let sz = new_size_unknown() in
+               unify_ty ~loc (Ty_size(sz)) tyx;
+               sz
+          | E_app(E_const(Op(Int_of_size _)),E_const(C_size sz1)) -> sz1
+          | E_app(E_fun(p,_,e1),e') -> aux (Ast_subst.subst_p_e p e' e1)
+          | E_array_length(x,loc_c) ->
+               let tyx = typ_ident ~loc g x in
+               let size_array = new_size_unknown() in
+               unify_ty ~loc (Ty_array(size_array,new_tyB_unknown(),new_label_unknown())) tyx;
+               size_array
+          | E_app(E_const(Op(Runtime(External_fun("Int.add",_)))), E_tuple[e1;e2]) ->
+              (try add e1 e2 with Cannot_evaluate_size -> add e2 e1)
+          | E_app(E_const(Op(Runtime(External_fun("Int.sub",_)))), E_tuple[e1;e2]) ->
+              sub e1 e2
+          | E_app(E_const(Op(Runtime(External_fun("Int.mul",_)))), E_tuple[e1;e2]) ->
+              (try mul e1 e2 with Cannot_evaluate_size -> mul e2 e1)
+          | _ -> raise Cannot_evaluate_size
+        in
+        try 
+          E_app(E_const(Op(Int_of_size loc)),E_const(C_size(canon_size @@ aux (Ast_undecorated.remove_deco e))))
+        with Cannot_evaluate_size -> e
+      in
+      let s0 = new_size_unknown ?name:(match s with
+                                       | Sz_var{contents=Unknown{name=Some x}} -> Some (x^"'")
+                                       | _ -> None) () in
+      unify_size ~loc s (Sz_add(s0,1));
+      let dopt = match eval_static e1, eval_static e2 with
+                 | E_app(E_const(Op(Int_of_size _)),E_const(C_size (Sz_lit n))), 
+                   E_app(E_const(Op(Int_of_size _)),E_const(C_size sz2)) ->
+                    let sz = new_size_unknown () in
+                    unify_size ~loc (Sz_add(sz,n)) (Sz_add(sz2,1));
+                    Some (Dur_mulDiv(sz,Dur_add(d3,Dur_int 1),s))
+                 | _ -> None in
+      let d' = match dopt with        
+               | None ->
+                  (match canon_size vsize with
+                   | Sz_lit n when n < 20 -> let sz = Sz_pow2(Sz_add(vsize,1)) in
+                                             Dur_mulDiv(sz,Dur_add(d3,Dur_int 1),s)
+                   | _ -> Dur_top)
+                | Some d -> d
+      in
+      Ty_base TyB_unit, d'
+  | E_parfor(x,_,_,e3,_) -> 
+      (** variant of E_for with total unfolding and without initial pause **)
+      let g' = env_extend ~loc g (P_var x) (Ty_base (TyB_int (new_size_unknown()))) in (* todo loc of pattern *)
+      let (ty3,d3) = typ_exp ~collect_sig ~statics ~genv ~ctors
+                             ~toplevel:false ~loc:(loc_of e3) g' e3 in (* todo *)
+      unify_ty ~loc:(loc_of e3) ty3 (Ty_base TyB_unit);
+      (Ty_base TyB_unit, d3)
+  | E_generate((p,(ty,tyB),e1),e2,_,_,_) ->
+      let vsize1 = new_size_unknown() in
+      let intv1 = Ty_base (TyB_int vsize1) in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e2) g e2 in
+      unify_ty ~loc:(loc_of e2) ty2 (Ty_base tyB);
+      let g' = env_extend ~loc g p (Ty_tuple[intv1;ty2]) in
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g' e1 in
+      ty1,Dur_max(d1,d2) (* n1+n1+ ... n fois *)
+  | E_vector(es) ->
+      let v = new_tyB_unknown () in
+      let ns = List.map (fun ei ->
+          let t,n = typ_exp ~collect_sig ~statics ~genv ~ctors
+                            ~toplevel:false ~loc:(loc_of ei) g ei in
+          unify_ty ~loc:(loc_of ei) t (Ty_base v);
+          n) es
+      in
+      let n = List.fold_left (fun acc n -> Dur_max(acc,n)) (Dur_int 0) ns in
+      Ty_base(Operators.vect_ (Sz_lit(List.length es)) v),n
+  | E_vector_mapi(_,(p,(tyB1,tyB2),e1),e2,size_vect) ->
+      let vsize1 = new_size_unknown() in
+      let intv1 = TyB_int vsize1 in
+      let ty2,d2 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                      ~toplevel:false ~loc:(loc_of e2) g e2 in (* TODO: force ty2 to be a base type *)
+      let w = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e2) (Ty_base w) ty2;
+      unify_tyB ~loc:(loc_of e2) w (Operators.vect_ size_vect tyB1); (* todo: loc ok ? *)
+      let g' = env_extend ~loc g p (Ty_base (TyB_tuple[intv1;tyB1])) in 
+      (* todo: better type error message, here, it says:
+         "An expression has type (int<~z76>, ...) but was expected of type ..." 
+      *)
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                        ~toplevel:false ~loc:(loc_of e1) g' e1 in
+      unify_ty ~loc:(loc_of e1) (Ty_base tyB2) ty1;
+      Ty_base (Operators.vect_  size_vect tyB2),d1 (* n times d1 *)
+  | E_run (i,e1,_) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                         ~toplevel ~loc:(loc_of e1) g e1 in (* TODO: force ty2 to be a base type *)
+      (match List.assoc_opt i genv.externals with
+      | Some (ty,shared,_) ->
+          let d2 = Dur_int (if shared then 1 else 0) in
+          let tyB = new_tyB_unknown () in
+          let d3 = new_dur_unknown() in
+          let ty2 = Ty_fun(ty1, d3, tyB) in
+          unify_ty ~loc ty ty2; (* todo loc *)
+          Ty_base tyB,Dur_max(Dur_max(d1,d2),d3)
+      | None -> Prelude.Errors.raise_error ~msg:("unbound external circuit "^i) ())
+      | E_pause (_,e1) -> 
+          let ty1,_ = typ_exp ~collect_sig ~statics ~genv ~ctors
+                          ~toplevel ~loc:(loc_of e1) g e1 in
+          (ty1, Dur_int 1)
+      | E_sig_get(x) ->
+        let tyx = typ_ident ~loc g x in (* todo loc of x *)
+        let v = new_tyB_unknown () in
+        unify_ty ~loc (Ty_signal(v)) tyx; (* todo loc of x *)
+        (Ty_base v, Dur_int 0)
+  | E_emit(x,e1) ->
+      let tyx = typ_ident ~loc g x in
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc g e1 in
+      let v = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base v);
+      unify_ty ~loc (Ty_signal(v)) tyx; (* todo loc of x *)
+      (Ty_base TyB_unit, d1)
+  | E_sig_create(e1) ->
+      (* let ty1,d1 = typ_exp ~collect_sig ~statics ~externals ~sums ~ctors ~toplevel:false ~loc g e1 in
+      unify_dur ~loc:(loc_of e1) d1 Dur_zero;
+      let v = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base v);
+      (Ty_signal v, Dur_zero)*)
+      let v = new_tyB_unknown () in
+      (Ty_signal v, Dur_int 0)
+  | E_loop(e1) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base TyB_unit);
+      (Ty_base TyB_unit, Dur_top)
+  | E_trap(tyB,_) ->
+      (Ty_trap tyB, Dur_int 0)
+  | E_exit(x,e1) ->
+      let tyx = typ_ident ~loc g x in (* todo: get loc of x *)
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      let v = new_tyB_unknown () in
+      unify_ty ~loc:(loc_of e1) ty1 (Ty_base v);
+      unify_ty ~loc (Ty_trap(v)) tyx; (* todo: get loc of x *)
+      (Ty_base TyB_unit, d1)
+  | E_suspend(_,e1,x) ->
+      let tyx = typ_ident ~loc g x in (* todo: get loc of x *)
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors 
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc (Ty_signal(TyB_bool)) tyx; (* todo: get loc of x *)
+      (ty1, Dur_top)
+  | E_assert(e1,loc_e1) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc:loc_e1 ty1 (Ty_base TyB_bool);
+      (Ty_base TyB_unit, d1)
+  | E_await(x,_) ->
+      let tyx = typ_ident ~loc g x in
+      unify_ty ~loc (Ty_signal(TyB_bool)) tyx; (* todo loc of x *)
+      (Ty_base TyB_unit, Dur_top)
+
+let typing_handler ?(msg="") f () =
+  let open Format in
+  let open Prelude.Errors in
+  let pp_tyB fmt tyB = pp_tyB fmt (rebase_tyB tyB) in
+  let pp_ty fmt ty = pp_ty fmt (rebase_ty ty) in
+  try f () with
+  | CannotUnify(loc,cannot::l) ->
+      error ~loc (fun fmt ->
+        fprintf fmt "%s@," msg;
+        ((match cannot with
+         | Ty(ty1,ty2) ->
+              fprintf fmt "This expression has type %a but was expected of type %a"
+                (emph_pp bold pp_ty) (canon_ty ty1)
+                (emph_pp bold pp_ty) (canon_ty ty2)
+         | TyB(tyB1,tyB2) ->
+             fprintf fmt "This expression has basic type %a but was expected of basic type %a"
+                (emph_pp bold pp_tyB) (canon_tyB tyB1)
+                (emph_pp bold pp_tyB) (canon_tyB tyB2)
+          | Ty_TyB(ty1,tyB2) ->
+             fprintf fmt "This expression has type %a but was expected of basic type %a"
+              
+              (emph_pp bold pp_ty) (canon_ty ty1)
+              (emph_pp bold pp_tyB) (canon_tyB tyB2)
+          | TyB_Ty(tyB1,ty2) ->
+             fprintf fmt "@[<v>This expression has basic type %a but was expected of type %a@]"
+              
+              (emph_pp bold pp_tyB) (canon_tyB tyB1)
+              (emph_pp bold pp_ty) (canon_ty ty2)
+          | Size(sz1,sz2) ->
+              fprintf fmt "A type has size %a but was expected of size %a"
+                (emph_pp bold pp_size) (canon_size sz1)
+                (emph_pp bold pp_size) (canon_size sz2)
+          | Dur(d1,d2) ->
+              fprintf fmt "worst-case duration %a should be less than or equal to %a"        
+                (emph_pp bold pp_dur) (canon_dur d1)
+                (emph_pp bold pp_dur) (canon_dur d2)
+          | Label(l1,l2) ->
+              fprintf fmt "label %a should be %a"  
+                (emph_pp bold pp_label) (canon_label l1)
+                (emph_pp bold pp_label) (canon_label l2)
+          | Imcompatible_length(ty1, ty2) ->
+              fprintf fmt "wrong number of elements:@,this expression has type %a but was expected of type %a"
+                (emph_pp bold pp_ty) (canon_ty ty1)
+                (emph_pp bold pp_ty) (canon_ty ty2)
+          | Pat_ty (p,ty) ->
+              fprintf fmt "pattern %a should have type %a"
+                (emph_pp bold Ast_pprint.pp_pat) p 
+                (emph_pp bold pp_ty) (canon_ty ty)
+          | AbstractTy_mismatch(x1,x2) ->
+                fprintf fmt "This expression has type %a but was expected of type %a"
+                (emph_pp bold (fun fmt () -> fprintf fmt "%s" x1)) () 
+                (emph_pp bold (fun fmt () -> fprintf fmt "%s" x2)) () 
+          | Cyclic_Ty(n,t) ->
+              fprintf fmt "%s@,This expression has a cyclic type %a"
+                msg (emph_pp bold pp_ty) (canon_ty t)
+          | Cyclic_Dur(n,dur) ->
+              fprintf fmt "The function type of worst-case duration %a is cyclic"
+              (emph_pp bold pp_dur) (canon_dur dur)
+          | Cyclic_Size(n,sz) ->
+              fprintf fmt "This expression contains a size %a is cyclic"
+              (emph_pp bold pp_size) (canon_size sz)
+          | Cyclic_label(n,l) ->
+              fprintf fmt "This expression contains a location %a that is cyclic"
+              (emph_pp bold pp_label) (canon_label l)
+          | Missing_record_field(x) ->
+              fprintf fmt "Missing record field %a" (emph_pp blue pp_print_string) x
+          | Record_field_mismatch(x,tyB1,tyB2) ->
+              fprintf fmt "The record field %a has type %a but was expected of type %a" 
+                               (emph_pp blue pp_print_string) x
+                               (emph_pp bold pp_tyB) (canon_tyB tyB1)
+                               (emph_pp bold pp_tyB) (canon_tyB tyB2)
+          );
+          List.iter (fun _ -> fprintf fmt "@]") l;
+          fprintf fmt "@,"
+         );
+        let rec inspect = function
+        | [] -> ()
+        | v::l' ->   
+         fprintf fmt "@[<v 2>@,";
+         emph_pp purple (fun fmt () -> fprintf fmt "Hint: ") fmt ();
+         (match v with
+          | Ty(ty1,ty2) ->
+              fprintf fmt "An expression has type %a but was expected of type %a"
+                (emph_pp bold pp_ty) (canon_ty ty1)
+                (emph_pp bold pp_ty) (canon_ty ty2)
+          | TyB(tyB1,tyB2) ->
+             fprintf fmt "An expression has basic type %a but was expected of basic type %a"
+                (emph_pp bold pp_tyB) (canon_tyB tyB1)
+                (emph_pp bold pp_tyB) (canon_tyB tyB2)
+          | Ty_TyB(ty1,tyB2) ->
+             fprintf fmt "An expression has type %a but was expected of basic type %a"
+              (emph_pp bold pp_ty) (canon_ty ty1)
+              (emph_pp bold pp_tyB) (canon_tyB tyB2)
+          | TyB_Ty(tyB1,ty2) ->
+             fprintf fmt "@[<v>An expression has basic type %a but was expected of type %a@]"
+              (emph_pp bold pp_tyB) (canon_tyB tyB1)
+              (emph_pp bold pp_ty) (canon_ty ty2)
+          | Size(sz1,sz2) ->
+              fprintf fmt "A type has size %a but was expected of size %a"
+                (emph_pp bold pp_size) (canon_size sz1)
+                (emph_pp bold pp_size) (canon_size sz2)
+          | Dur(d1,d2) ->
+              fprintf fmt "worst-case duration %a should be less than or equal to %a"  
+                (emph_pp bold pp_dur) (canon_dur d1)
+                (emph_pp bold pp_dur) (canon_dur d2)
+          | Label(l1,l2) ->
+              fprintf fmt "label %a should be %a"  
+                (emph_pp bold pp_label) (canon_label l1)
+                (emph_pp bold pp_label) (canon_label l2)
+          | Imcompatible_length(ty1, ty2) ->
+              fprintf fmt "wrong number of elements:@,an expression has type %a but was expected of type %a"
+                (emph_pp bold pp_ty) (canon_ty ty1)
+                (emph_pp bold pp_ty) (canon_ty ty2)
+          | Pat_ty (p,ty) ->
+              fprintf fmt "pattern %a should have type %a"
+                (emph_pp purple Ast_pprint.pp_pat) p 
+                (emph_pp purple pp_ty) (canon_ty ty)
+          | AbstractTy_mismatch(x1,x2) ->
+                fprintf fmt "An expression has type %a but was expected of type %a"
+                (emph_pp bold (fun fmt () -> fprintf fmt "%s" x1)) () 
+                (emph_pp bold (fun fmt () -> fprintf fmt "%s" x2)) () 
+       | Cyclic_Ty(n,t) ->
+          fprintf fmt "%s@,An expression has a cyclic type %a\n"
+            msg (emph_pp bold pp_ty) (canon_ty t)
+       | Cyclic_Dur(n,dur) ->
+          fprintf fmt "An expression has worst-case duration %a that is cyclic\n"
+          (emph_pp bold pp_dur) (canon_dur dur)
+       | Cyclic_Size(n,sz) ->
+          fprintf fmt "An expression has size %a is cyclic\n"
+          (emph_pp bold pp_size) (canon_size sz)
+       | Cyclic_label(n,l) ->
+              fprintf fmt "An expression has location %a that is cyclic"
+              (emph_pp bold pp_label) (canon_label l)
+       | Missing_record_field(x) ->
+          fprintf fmt "Missing record field %a" (emph_pp blue pp_print_string) x
+       | Record_field_mismatch(x,tyB1,tyB2) ->
+              fprintf fmt "The record field %a has type %a but was expected of type %a" 
+                               (emph_pp blue pp_print_string) x
+                               (emph_pp bold pp_tyB) (canon_tyB tyB1)
+                               (emph_pp bold pp_tyB) (canon_tyB tyB2)
+        );
+          inspect l';
+          List.iter (fun _ -> fprintf fmt "@]") l;
+          fprintf fmt "@,"
+        in
+        inspect l)
+  | UnboundVariable(x,loc) ->
+    Prelude.Errors.raise_error ~loc ~msg:("unbound variable "^x) ()
+
+
+let typing_static ~loc ~ctors g glob =
+  match glob with
+  | Static_array_of (t,_) ->
+    (* Ty_array(new_size_unknown(),new_tyB_unknown())*) t (* todo: translate [t] *)
+  | Static_array(c,n) ->
+      let elem = typ_const ~loc ~ctors c in  (*todo loc *)
+      let l = Ast.gensym ~prefix:"l" () in
+      Ty_array(Sz_lit n,elem, Label_name l)
+  | Static_const c ->
+      Ty_base (typ_const ~loc ~ctors c)
+
+
+let env_extend_statics ~ctors env statics =
+  List.fold_left (fun env (x,global_decl) ->
+    let ty_glob = typing_static ~loc:Prelude.dloc ~ctors env global_decl in
+    SMap.add x (Forall(Vs.empty,ty_glob)) env) env statics ;;
+
+
+let env_extend_operators env operators =
+  SMap.fold (fun x (ty,_) env ->
+    SMap.add x (generalize (SMap.bindings env) ty) env) operators env ;;
+
+let env_extend_externals env externals =
+  List.fold_left (fun env (x,(ty,_,_)) ->
+    SMap.add x (Forall(Vs.empty, ty)) env) env externals ;;
+
+let typing ?collect_sig ?(env=SMap.empty) ?(msg="") ~statics ~genv e =
+  let loc = loc_of e in
+  typing_handler (fun () ->
+    let ctors = List.fold_left (fun ctors (xt,sum) ->
+                    List.fold_left (fun ctors (x,typ_param) ->
+                                       SMap.add x xt ctors) ctors sum
+                     ) SMap.empty genv.sums in
+    let env = env_extend_statics ~ctors env statics in
+    let env = env_extend_operators env genv.operators in
+    let env = env_extend_externals env genv.externals in
+    let t,n = typ_exp ?collect_sig ~statics ~genv ~ctors ~toplevel:true ~loc env e in
+    canon_ty t, n) ()
+
+
+let reset_repl, when_repl =
+
+  let r = ref SMap.empty in (* the typing environment is updated at each call *)
+
+  (fun () -> r := SMap.empty),
+  (fun statics ~genv (show_val:bool) ((p,e),loc) ->
+    typing_handler (fun () ->
+        let env = !r in
+        let (ty,d) = typing ~env ~statics ~genv e in
+        let ty_p = type_annotation_from_pat ~loc p in
+        unify_ty ~loc ty ty_p;
+        r := typing_handler (fun () -> (env_extend ~loc:(loc_of e) ~gen:(evaluated e (* && match un_annot e with E_fun _ | E_fix _ |  E_const (Op (Runtime(External_fun(_)))) -> true | _ -> false*)) !r p ty)) ();
+        if show_val then (
+           let open Prelude.Errors in
+           let open Format in
+           let xs = vars_of_p p in
+           fprintf std_formatter "@[<v>";
+           SMap.iter (fun x _ ->
+             Prelude.Errors.(emph bold std_formatter "val");
+             fprintf std_formatter " %s : " x;
+             let (Forall(vs,tyx)) = SMap.find x !r in
+             pp_scheme std_formatter @@ Forall(vs,tyx);
+             let d' = simpl_dur_wcet_with_rebase (* ~keep_sharing:true*) d in
+             fprintf std_formatter " | %a@,"
+               pp_dur (canon_dur d')
+           ) xs;
+           fprintf std_formatter "@]@."
+        )) ())
+
+let get_vector_size_ref = ref true ;;
+
+
+(** [fun_shape ty] returns a type [ty -{'a}-> 'b]
+    where ['a] and ['b] are fresh type variable. *)
+let fun_shape (t_arg : ty) : ty =
+  Ty_fun(t_arg,new_dur_unknown(),new_tyB_unknown())
+
+let typing_with_argument ?(get_vector_size=true) ?collect_sig ({genv;main} : pi) (arg_list : e list) : ty * dur =
+  typing_handler (fun () ->
+    (* caution: [typing_handler] put a message about **expressions**
+       when CannotUnify is raised, wherever it is raised *)
+    get_vector_size_ref := get_vector_size;
+    let t_arg = new_ty_unknown() in
+    let env = SMap.empty in
+    let loc = loc_of main in
+    
+    let e = mk_loc loc @@ ty_annot ~ty:(fun_shape t_arg) main in
+    let genv = genv in
+    let (ty,response_time) =
+      typing ?collect_sig ~env ~statics:genv.statics ~genv e
+    in
+    (if !relax_flag then () else
+       let t = canon_ty ty in
+       match t with
+       | Ty_fun(_,dur,_) ->
+          (try unify_dur ~loc:(loc_of e) dur (Dur_int 0)
+           with CannotUnify _ -> 
+             let open Prelude.Errors in
+             error (fun fmt ->
+                 Format.fprintf fmt
+                   "@[<v>This program has type %a. It is not reactive. @]" (* Hint: use eta-expansion. *)
+                   (emph_pp green pp_ty) t))
+       | _ -> assert false);
+
+    let () =
+       let t = canon_ty ty in
+       match t with
+       | Ty_fun(ty_arg,_,_) ->
+         (try
+            unify_ty ~loc:(loc_of e) 
+               ty_arg (Ty_base (new_tyB_unknown()));
+          with CannotUnify _ ->
+           let open Prelude.Errors in
+           error (fun fmt ->
+               Format.fprintf fmt
+                 "@[<v>The type of the program input should be a basic type. @]"))
+       | _ -> assert false
+    in
+    List.iter (fun a -> typing ~env ~msg:"checking inputs given by option -arg, "
+                  ~statics:genv.statics ~genv
+                  (ty_annot ~ty:t_arg a)
+                        |> ignore) arg_list;
+
+    unify_ty ~loc (Ty_fun(t_arg,new_dur_unknown(),new_tyB_unknown())) ty;
+
+    (canon_ty ty, response_time)
+  ) ()
+
+
+let typing_pi pi =
+  typing_with_argument pi []

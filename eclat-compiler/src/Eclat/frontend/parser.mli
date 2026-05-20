@@ -1,0 +1,154 @@
+
+(* The type of tokens. *)
+
+type token = 
+  | XOR
+  | WITH_SIZES
+  | WITH
+  | WHERE
+  | WHEN
+  | WCET
+  | VECT_CREATE
+  | VECTOR_MAPI
+  | UP_IDENT of (string)
+  | UNROLL
+  | TYPE
+  | TYB_VAR_IDENT of (string)
+  | TVAR_IDENT of (string)
+  | TUPLE_UPDATE
+  | TUPLE_OF_INT
+  | TUPLE_GET
+  | TRAP
+  | TO
+  | TIMES
+  | THEN
+  | SYM of (string)
+  | SUSPEND
+  | STRING_LIT of (string)
+  | STATIC
+  | SIZE_VAR_IDENT of (string)
+  | SIZE_CREATE
+  | SIGNAL
+  | SHARED
+  | SEMI_SEMI
+  | SEMI
+  | RUN
+  | RPAREN
+  | RIGHT_ARROW
+  | RETURNS
+  | RESIZE_INT
+  | RESET
+  | REGISTER
+  | REC
+  | RCUR_MINUS_GT
+  | RCUR
+  | RBRACK_MINUS_GT
+  | RBRACKET
+  | QUOTE
+  | QUESTION_MARK
+  | PLUS
+  | PIPE_RBRACKET
+  | PIPE_PIPE
+  | PIPE_COMMA_PIPE
+  | PIPE
+  | PERCENT
+  | PARFOR
+  | OR
+  | OPERATOR_IDENT of (string)
+  | OPERATOR
+  | OF
+  | NOT
+  | NODE
+  | NEQ
+  | MOD
+  | MINUS_LCUR
+  | MINUS_BRACK
+  | MINUS
+  | MERGE
+  | MATCH
+  | MACRO_GENERATE
+  | MACRO_FOR
+  | LXOR
+  | LT_LT
+  | LT
+  | LSR
+  | LSL
+  | LPAREN
+  | LOR
+  | LOOP
+  | LET
+  | LEFT_ARROW
+  | LE
+  | LCUR
+  | LBRACKET_PIPE
+  | LBRACKET
+  | LAND
+  | INT_OF_TUPLE
+  | INT_MAPI
+  | INT_LIT of (int)
+  | INIT_TUPLE
+  | INIT_INT
+  | INIT
+  | IN
+  | IMPURE
+  | IMPLY
+  | IMMEDIATE
+  | IF
+  | IDENT of (string)
+  | HAT
+  | GT_GT
+  | GT
+  | GET_START
+  | GET_END
+  | GE
+  | FUN
+  | FOR
+  | FIX
+  | FBY
+  | EXTERNAL
+  | EXIT
+  | EXEC
+  | EQ_EQ
+  | EQ
+  | EOF
+  | END
+  | EMIT
+  | ELSE
+  | DUR_VAR_IDENT of (string)
+  | DOT
+  | DONE
+  | DOLLARD
+  | DO
+  | DIV
+  | DEFAULT
+  | CREATE
+  | COMMA
+  | COL_EQ
+  | COL
+  | CHAR_LIT of (char)
+  | BY
+  | BOOL_LIT of (bool)
+  | BANG
+  | AWAIT
+  | AT_AT
+  | AT
+  | ASSERT
+  | ASR
+  | ARRAY_MAKE
+  | ARRAY_CREATE
+  | AND
+  | AMP_AMP
+  | AMP
+
+(* This exception is raised by the monolithic API functions. *)
+
+exception Error
+
+(* The monolithic API. *)
+
+val pi: (Lexing.lexbuf -> token) -> Lexing.lexbuf -> (((Ast.x * (Types.ty * bool * Prelude.loc)) list *
+   (Ast.x * (Types.ty * (bool * int * bool * Prelude.loc))) list) *
+  (Ast.x * Ast.static) list * (Ast.x * (Ast.x * Types.tyB) list) list *
+  ((Ast.p * Ast.e) * Prelude.loc) list)
+
+val arguments_eof: (Lexing.lexbuf -> token) -> Lexing.lexbuf -> (Ast.e list)

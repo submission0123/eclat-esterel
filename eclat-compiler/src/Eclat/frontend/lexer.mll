@@ -1,0 +1,204 @@
+{
+  open Parser
+  exception Eof
+
+  let keywords =
+    Prelude.hashtbl_of_list_assoc @@
+     [ "let",   LET;
+       "node",  NODE;
+       "rec",   REC;
+       "fun",   FUN;
+       "register", REGISTER;
+       "reg",   REGISTER;
+       "exec",  EXEC;
+       "reset", RESET;
+       (* "fby",   FBY;
+       "merge", MERGE;*)
+       "where", WHERE;
+       "returns", RETURNS;
+       "and",   AND;
+       "in",    IN;
+       "if",    IF;
+       "of",    OF;
+       "then",  THEN;
+       "else",  ELSE;
+       "fix",   FIX;
+       "true",  BOOL_LIT true;
+       "false", BOOL_LIT false;
+       "or",    OR;
+       "mod",   MOD;
+       "last",  INIT; (* for compatibility with previous papers *)
+       "init",  INIT;
+       "default",  DEFAULT;
+       "static", STATIC;
+       "match", MATCH;
+       "with", WITH;
+       "end", END;
+       "xor", XOR;
+       "land", LAND;
+       "lor", LOR;
+       "lxor", LXOR;
+       "lsl", LSL;
+       "lsr", LSR;
+       "asr", ASR;
+       "assert", ASSERT;
+       "when",   WHEN;
+       "suspend", SUSPEND;
+       "resize_int", RESIZE_INT;
+       "vect_create", VECT_CREATE;
+       "tuple_of_int",TUPLE_OF_INT;
+       "int_of_tuple",INT_OF_TUPLE;
+       "type", TYPE;
+       "to", TO;
+       "do", DO;
+       "done", DONE;
+       "for", FOR;
+       "macro_for", MACRO_FOR;
+       "parfor", PARFOR;
+       "macro_generate", MACRO_GENERATE;
+       "generate", MACRO_GENERATE;
+       "iterate", MACRO_GENERATE;
+       "immediate", IMMEDIATE;
+       "array_create",ARRAY_CREATE;
+       "init_tuple",INIT_TUPLE;
+       "init_int",INIT_INT;
+       "unroll", UNROLL;
+       "create", CREATE;
+       "get_start", GET_START;
+       "get_end", GET_END;
+       "size_create", SIZE_CREATE;
+       "vect_mapi", VECTOR_MAPI;
+       "int_mapi", INT_MAPI;
+       "external", EXTERNAL;
+       "operator", OPERATOR;
+       "shared", SHARED;
+       "run", RUN;
+       "impure",IMPURE;
+       "make", ARRAY_MAKE;
+       "emit", EMIT;
+       "signal", SIGNAL;
+       "end",   END;
+       "trap", TRAP;
+       "exit",EXIT;
+       "by", BY;
+       "wcet", WCET;
+       "loop", LOOP;
+       (* "vect_of_tuple", VECT_OF_TUPLE*)
+     ]
+
+
+  let nested_comment_depth = ref 0
+
+let paren_lvl = ref 0 
+let brack_lvl = ref 0 
+
+let get_loc lexbuf =
+  let startp = Lexing.lexeme_start_p lexbuf in
+  let endp = Lexing.lexeme_end_p lexbuf in
+  (!Current_filename.current_file_name,(startp,endp))
+
+}
+
+(* let tvar_ident = [''']['a'-'z'] ['a'-'z''A'-'Z''0'-'9''_''A'-'Z'''']* *)
+let ident = ['a'-'z''_'] ['a'-'z''A'-'Z''0'-'9''_']*[''']*
+let up_ident = ['A'-'Z']['a'-'z''A'-'Z''0'-'9''_''A'-'Z']*
+let tvar_ident =  ['a'-'z''A'-'Z''0'-'9''_''A'-'Z']*
+
+let op_ident = up_ident '.' ident
+
+rule token = parse
+| ident as id            { try Hashtbl.find keywords id with
+                           | Not_found -> IDENT id }
+| up_ident as id                 { UP_IDENT id }
+| [''']   (tvar_ident as lxm) { TVAR_IDENT lxm }
+| ['`''~'](tvar_ident as lxm) { TYB_VAR_IDENT lxm }
+| ['$']   (tvar_ident as lxm) { DUR_VAR_IDENT lxm }
+| ['?']   (tvar_ident as lxm) { SIZE_VAR_IDENT lxm }
+| op_ident as id{ OPERATOR_IDENT id }
+| '('                 { incr paren_lvl; LPAREN }
+| ')'                 { if !paren_lvl <= 0 then
+                           Prelude.Errors.raise_error ~loc:(get_loc lexbuf)
+                              ~msg:"unbalanced parenthesis" ()
+                        else ();
+                        decr paren_lvl; RPAREN }
+| '['                 { incr brack_lvl; LBRACKET }
+| ']'                 { if !brack_lvl <= 0 then
+                           Prelude.Errors.raise_error ~loc:(get_loc lexbuf)
+                              ~msg:"unbalanced bracket" ()
+                        else ();
+                        decr brack_lvl; RBRACKET }
+| "%with_sizes"       { WITH_SIZES }
+| "|]"                { PIPE_RBRACKET }
+| "[|"                { LBRACKET_PIPE }
+| "{"                 { LCUR }
+| "}"                 { RCUR }
+| "["                 { LBRACKET }
+| "]"                 { RBRACKET }
+| '@'                 { AT }
+| "@@"                { AT_AT }
+| ','                 { COMMA }
+| ':'                 { COL }
+| '''                 { QUOTE }
+| "<-"                { LEFT_ARROW }
+| "->"                { RIGHT_ARROW }
+| "=>"                { IMPLY }
+| "|"                 { PIPE }
+| "||"                { PIPE_PIPE }
+| "|,|"               { PIPE_COMMA_PIPE }
+| ['0'-'9']+ as s
+| ('0'('b'|'x')['0'-'9']['0'-'9''_']*) as s { INT_LIT (int_of_string s) }
+| "+"                 { PLUS }
+| "-"                 { MINUS }
+| "*"                 { TIMES }
+| "/"                 { DIV }
+| "<"                 { LT }
+| "<="                { LE }
+| ">"                 { GT }
+| ">="                { GE }
+| "=="                { EQ_EQ }
+| "="                 { EQ }
+| ":="                { COL_EQ }
+| "!"                 { BANG }
+| "?"                 { QUESTION_MARK }
+| "!=" | "<>"         { NEQ }
+| "<<"                { LT_LT }
+| ">>"                { GT_GT }
+| "&&"                { AMP_AMP }
+| "&"                 { AMP }
+| "-{"                { MINUS_LCUR }
+| "-["                { MINUS_BRACK }
+| "}->"               { RCUR_MINUS_GT }
+| "]->"               { RBRACK_MINUS_GT }
+(* | "%"              { PERCENT }*)
+| "^"                 { HAT }
+| "loop:"             { LOOP }
+| "await:"            { AWAIT }
+| ['"']([^'"']* as s)['"'] { STRING_LIT s }
+| ['\r']['\n'] | ['\n']| ['\r'] { (Lexing.new_line lexbuf) ; (token lexbuf) }
+| [' ' '\t']          { token lexbuf }
+| ';'                 { SEMI }
+| '.'                 { DOT }
+| ";;"                { SEMI_SEMI }
+| "$"                 { DOLLARD }
+| [''']([^'''] as c) [''']    { CHAR_LIT(c) }
+| [''']['\\'] ((['0'-'9']['0'-'9']['0'-'9']) as c) [''']  { 
+                        let n = int_of_string c in 
+                        if n > 255 then
+                          Prelude.Errors.raise_error ~loc:(get_loc lexbuf)
+                              ~msg:(Printf.sprintf "%d is outside the range of legal characters (0-255))" n) ()
+                        else CHAR_LIT(Char.chr n) }
+| eof | "%eof"        { EOF }
+| "(*"                { incr nested_comment_depth; comment lexbuf }
+| _  as lxm           { Prelude.Errors.raise_error ~loc:(get_loc lexbuf)
+                              ~msg:(Printf.sprintf "Unexpected character: %c (code %d)"  lxm (Char.code lxm)) () }
+
+and comment = parse
+| "(*"                { incr nested_comment_depth; comment lexbuf }
+| ['\r']['\n'] | ['\n']| ['\r'] { (Lexing.new_line lexbuf) ; (comment lexbuf) }
+| "*)"                { decr nested_comment_depth;
+                        if !nested_comment_depth <= 0 (* comments can be nested *)
+                        then token lexbuf
+                        else comment lexbuf }
+| eof                 { Prelude.Errors.raise_error ~loc:(get_loc lexbuf)
+                              ~msg:("unclosed comment at the end of file"^ !Current_filename.current_file_name) () }
+| _                   { comment lexbuf }
