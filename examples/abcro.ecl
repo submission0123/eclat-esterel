@@ -1,4 +1,12 @@
-(* ./eclat ../examples/abcro.ecl -arg="(true,false,true,false);(true,true,true,false);(false,false,false,true);(true,false,false,false);(true,true,false,false);(false,false,true,false);(false,false,false,true);(true,true,true,false);(false,false,false,true)" *)
+(******************************************************************
+simulation:
+==========
+$ ./eclat ../examples/abcro.ecl -arg="(true,false,true,false);(true,true,true,false);(false,false,false,true);(true,false,false,false);(true,true,false,false);(false,false,true,false);(false,false,false,true);(true,true,true,false);(false,false,false,true)"
+
+synthesis:
+=========
+$ ./eclat ../examples/abcro.ecl -noprint -top="sw:4|ledr:1"
+********************************************************************)
 
 let halt() =
   loop pause end ;;

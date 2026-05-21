@@ -532,7 +532,7 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
   begin
     let update fmt (x,_) = 
       if Ast.SMap.mem x !BHDL_typing.global_sigs  then () else
-      fprintf fmt "%a <= (others => '0');@," pp_ident x
+      fprintf fmt "%a <= (others => '0');" pp_ident x
     in
     pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "@,")
        update fmt others;
@@ -566,6 +566,9 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
      fprintf fmt "%a := %a;@," pp_ident sv pp_ident (sv^"%now");
   ) !List_machines.extra_machines;
 
+   List.iter (fun (x,_) ->
+     fprintf fmt "%a := (others => '0');@," pp_ident x;
+  ) variables_not_registers;
   
   if !Operators.flag_no_print then () else (
       List.iter (fun (x,st) ->

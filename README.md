@@ -18,18 +18,6 @@ To build from source, the pre-requisites are:
   on a Terasic DE10-lite board (having an Intel MAX 10 FPGA)
   Vivado and Yosys backend are also supported.
 
-Source code
------------------
-
-The main files involved in our extension are:
-
-* eclat/eclat-compiler/src/Eclat/syntax/ast.ml
-* eclat/eclat-compiler/src/Eclat/typing/types.ml
-* eclat/eclat-compiler/src/Eclat/typing/typing.ml
-* eclat/eclat-compiler/src/Eclat/compile/backend/gen_BHDL.ml                             (compilation to BHDL)
-* eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml        (ongoing work)
-* eclat-compiler/src/Eclat/compile/middle_end/analyses/check_pauses_loop.ml    (detecting instantaneous loop)
-
 Benchmarks
 -----------------
 
@@ -91,3 +79,29 @@ val main : (unit -[2]-> unit) | 0
 > #q.
 Error: This program has type (unit -[2]-> unit). It is not reactive.
 ```
+
+built-in `await` construct
+----------
+
+The paper mentions a built-in `await` construct that is more efficiently compiled than the usual derivated construct (with `loop` and `trap`).
+Currently, this built-in `await` is provided as the keyword `await:`. For instance:
+
+```
+$ ./eclat
+> let f (s,o) = await:s; emit o;;
+val f : ((bool signal * bool signal) -[⊤]-> unit) | 0
+```
+
+Source code
+-----------------
+
+The main files involved in our extension are:
+
+* [eclat-compiler/src/Eclat/syntax/ast.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/syntax/ast.ml)
+* [eclat-compiler/src/Eclat/typing/types.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/typing/types.ml)   (defining types `trap`, `'a signal` and `'a ref`)
+* [eclat-compiler/src/Eclat/typing/typing.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/typing/typing.ml)  (typing rules for `Esterel` constructs)
+* [eclat-compiler/src/Eclat/compile/backend/gen_BHDL.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/backend/gen_BHDL.ml)          (compilation to BHDL)
+* [eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml)        (causality analysis - ongoing work)
+* [eclat-compiler/src/Eclat/compile/middle_end/analyses/check_pauses_loop.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/middle_end/analyses/check_pauses_loop.ml)    (detecting instantaneous loop)
+* [eclat-compiler/src/BHDL/BHDL_syntax.ml](https://github.com/submission0123/eclat-esterel/blob/main/eclat-compiler/src/BHDL/BHDL_syntax.ml)    (target language)
+

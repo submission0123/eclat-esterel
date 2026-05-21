@@ -4,7 +4,7 @@
 --
 -- with the following command:
 --
---    ./eclat ../examples/abcro.ecl -arg=(true,false,true,false);(true,true,true,false);(false,false,false,true);(true,false,false,false);(true,true,false,false);(false,false,true,false);(false,false,false,true);(true,true,true,false);(false,false,false,true)
+--    ./eclat ../examples/abcro.ecl -noprint -top=sw:4|ledr:1
 
 
 library ieee;
@@ -59,38 +59,10 @@ end component;
       end process;
 
   process
-  variable \$v278\ : Values.t(0 to 3) := (others => '0');
-begin
+  begin
 
       -- Start computation
     wait for 5 ns;
-      \$v278\ := work.Values.val_true & work.values.val_false & work.Values.val_true & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.Values.val_true & work.Values.val_true & work.Values.val_true & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.values.val_false & work.values.val_false & work.values.val_false & work.Values.val_true;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.Values.val_true & work.values.val_false & work.values.val_false & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.Values.val_true & work.Values.val_true & work.values.val_false & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.values.val_false & work.values.val_false & work.Values.val_true & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.values.val_false & work.values.val_false & work.values.val_false & work.Values.val_true;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.Values.val_true & work.Values.val_true & work.Values.val_true & work.values.val_false;
-      tb_argument <= \$v278\;
-wait for 10 ns;
-      \$v278\ := work.values.val_false & work.values.val_false & work.values.val_false & work.Values.val_true;
-      tb_argument <= \$v278\;
-wait for 10 ns;
 
     wait;
   end process;

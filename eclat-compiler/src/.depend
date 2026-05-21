@@ -86,18 +86,18 @@ src/BHDL/optim/BHDL_propagation.cmo : \
 src/BHDL/optim/BHDL_propagation.cmx : \
     src/BHDL/BHDL_syntax.cmx \
     src/Eclat/syntax/ast.cmx
+src/BHDL/optim/rbw_collection.cmo : \
+    src/BHDL/BHDL_typing.cmo \
+    src/BHDL/BHDL_syntax.cmo \
+    src/Eclat/syntax/ast.cmo
+src/BHDL/optim/rbw_collection.cmx : \
+    src/BHDL/BHDL_typing.cmx \
+    src/BHDL/BHDL_syntax.cmx \
+    src/Eclat/syntax/ast.cmx
 src/BHDL/optim/remove_assigned_but_not_read_vars.cmo : \
     src/BHDL/BHDL_syntax.cmo
 src/BHDL/optim/remove_assigned_but_not_read_vars.cmx : \
     src/BHDL/BHDL_syntax.cmx
-src/BHDL/optim/war_collection.cmo : \
-    src/BHDL/BHDL_typing.cmo \
-    src/BHDL/BHDL_syntax.cmo \
-    src/Eclat/syntax/ast.cmo
-src/BHDL/optim/war_collection.cmx : \
-    src/BHDL/BHDL_typing.cmx \
-    src/BHDL/BHDL_syntax.cmx \
-    src/Eclat/syntax/ast.cmx
 src/BHDL/simul/gen_ocaml.cmo : \
     src/Eclat/typing/types.cmo \
     src/prelude.cmo \
@@ -163,9 +163,9 @@ src/Eclat/compile/backend/gen_BHDL.cmx : \
 src/Eclat/compile/backend/naming_convention.cmo :
 src/Eclat/compile/backend/naming_convention.cmx :
 src/Eclat/compile/compile.cmo : \
-    src/BHDL/optim/war_collection.cmo \
     src/Eclat/typing/typing.cmo \
     src/Eclat/compile/middle_end/rename_main_arg.cmo \
+    src/BHDL/optim/rbw_collection.cmo \
     src/prelude.cmo \
     src/Eclat/compile/middle_end/middle_end.cmo \
     src/BHDL/compile/list_machines.cmo \
@@ -184,9 +184,9 @@ src/Eclat/compile/compile.cmo : \
     src/BHDL/optim/BHDL_propagation.cmo \
     src/Eclat/syntax/ast.cmo
 src/Eclat/compile/compile.cmx : \
-    src/BHDL/optim/war_collection.cmx \
     src/Eclat/typing/typing.cmx \
     src/Eclat/compile/middle_end/rename_main_arg.cmx \
+    src/BHDL/optim/rbw_collection.cmx \
     src/prelude.cmx \
     src/Eclat/compile/middle_end/middle_end.cmx \
     src/BHDL/compile/list_machines.cmx \
