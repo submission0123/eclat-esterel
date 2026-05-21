@@ -1,4 +1,4 @@
-## FDL '06: Hardware synthesis of functional programs with Esterel constructs
+## FDL '26: Hardware synthesis of functional programs with Esterel constructs
 
 The paper presents an extension of [Eclat](https://github.com/lsylvestre/eclat) with `Esterel` constructs.
 Eclat is a a functional-imperative (ML-like) language with synchronous semantics
