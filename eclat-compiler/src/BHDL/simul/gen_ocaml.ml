@@ -288,9 +288,6 @@ let rec pp_s typing_env operators externals ~st fmt = function
 | S_fsm(id,rdy,x,cp,ts,s) ->
      pp_fsm typing_env operators externals fmt
         ~state_var:("state_"^id) ~idle:cp ~rdy (id,ts,s)
-| S_in_fsm(id,s) ->
-     let (st2,_,_) = List.assoc id !List_machines.extra_machines in
-     pp_s typing_env operators externals ~st:st2 fmt s
 | S_call(op,a) ->
    fprintf fmt "%a" (pp_call operators typing_env None) (Runtime(op),a)
 | S_external_run(f,id,res,rdy,a) ->

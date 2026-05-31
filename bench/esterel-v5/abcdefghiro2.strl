@@ -1,0 +1,17 @@
+module ABCDEFGHIRO2:
+  input A, B, C, D, E, F,G,H,I, A1, B1, C1, D1, E1, F1,G1,H1, R;
+  output O;
+  signal T in
+    [ run ABCDEFGHIRO [ signal T / O ] ||
+      run ABCDEFGHIRO [ signal T / A, A1 / B, B1 / C, C1 / D, D1 / E, E1 / F , F1/G, G1/H ] ]
+  end
+
+end module
+
+
+  %||
+  %   run ABCRO [ signal ABC / A, D / B, E / C ]
+ % end
+ %
+    % loop
+   %   [ await A || await B || await C || await D || await E || await R]; emit O end

@@ -104,6 +104,9 @@ let subst_e ?(warning=true) ?(when_var=(fun x -> x)) x ex e =
     | E_await(y,l) ->
         let z = if x <> y then y else as_ident ex in
         E_await(z,l)
+    | E_abort(e1,y,l) ->
+        let z = if x <> y then y else as_ident ex in
+        E_abort(ss e1,z,l)
     | e -> Ast_mapper.map ss e
   in
   ss e

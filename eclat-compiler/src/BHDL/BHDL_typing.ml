@@ -495,8 +495,6 @@ let rec typing_s ~genv ~result h s =
       typing_s ~genv ~result h s
   | S_fsm(_,rdy,result2,_,ts,s) ->
       typing_fsm h ~genv ~rdy ~result:result2 ~ty_result:(new_tvar()) (ts,s)
-  | S_in_fsm(_,s) ->
-      typing_s ~genv ~result h s
   | S_call(op,args) ->
       let t = typing_a ~genv h args in
       unify (typing_op ~genv h t (Runtime op)) TUnit

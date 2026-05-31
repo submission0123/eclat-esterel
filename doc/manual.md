@@ -160,7 +160,7 @@ e ::=                         -- expression
     | pause
     | trap x in e
     | exit x
-    | signal<>
+    | signal x in e
     | emit x(e)
     | ?x
     | suspend e when x

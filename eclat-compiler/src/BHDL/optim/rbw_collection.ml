@@ -99,8 +99,6 @@ let rec compute s acc =
       let (_, rwb0) = compute s0 acc in
       let acc' = add rdy @@ add result acc in
       (acc', union rbw rwb0)
-  | S_in_fsm(id,s1) ->
-      compute s1 acc
   | S_sig_set(_,a) ->
       let rbw = diff (vars_a a) acc in
       (acc, rbw)

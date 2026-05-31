@@ -1,0 +1,8 @@
+  module ABRO:
+  input A, B, R;
+  output O;
+  loop
+    [await A || await B]; %[ run await2 [ signal A/S] || run  await2 [signal B/S] ];
+     emit O
+  each R
+  end module

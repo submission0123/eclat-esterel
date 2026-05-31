@@ -98,8 +98,9 @@ type e =                      (** expression     [e]                       *)
   | E_suspend of l * e * x
 
   | E_assert of e * deco
-  | E_await of x * l     (* built-in ESTEREL contruct await, *)
-                         (* more efficiently compiled than as a derivated construct *)
+  | E_await of x * l
+  | E_abort of e * x * l (* built-in ESTEREL contructs await & abort, *)
+                         (* more efficiently compiled than as derivated constructs *)
 
 and e_static = size
 

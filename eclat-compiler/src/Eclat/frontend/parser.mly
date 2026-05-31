@@ -175,7 +175,7 @@ let check_abstract_type ~loc x szs tyB_list =
 %token ARRAY_CREATE ARRAY_MAKE
 %token INIT_TUPLE INIT_INT
 %token VECTOR_MAPI INT_MAPI
-%token EMIT SIGNAL LOOP TRAP EXIT SUSPEND AWAIT
+%token EMIT SIGNAL LOOP TRAP EXIT SUSPEND AWAIT ABORT
 %token LT_LT GT_GT
 /* The precedences must be listed from low to high. */
 
@@ -868,11 +868,11 @@ app_exp_desc:
         | _ -> List.fold_left (fun ef ei -> E_app(ef,ei)) e es*)
 | MINUS e1=aexp %prec prec_unary_minus { E_app(E_const(Op(Runtime(External_fun("Int.neg",new_ty_unknown ())))),e1) } 
 
-| e1=app_exp k=WHEN e2=app_exp 
+/*| e1=app_exp k=WHEN e2=app_exp 
      { E_app((mk_loc (with_file $loc(k)) (E_var "when_")),
             (mk_loc (with_file $loc) @@ E_tuple[(mk_loc (with_file $loc(e1)) @@ E_fun(P_unit,
               (new_ty_unknown (),new_tyB_unknown ()),e1)); e2])) } 
-
+*/
 | e1=app_exp op=binop e2=app_exp
         { E_app (mk_loc (with_file $loc(op)) @@ E_const (Op (Runtime(op))),
                  mk_loc (with_file $loc) @@ E_tuple [e1;e2])
@@ -940,8 +940,10 @@ app_exp_desc:
     match e with None -> E_emit(x,E_const (Bool true))
     | Some e ->  E_emit(x,e) 
 }
-| SIGNAL x=IDENT IN e1=exp { E_letIn(P_var x, new_ty_unknown(), E_sig_create (E_const (Unit)), e1) }
-/* | SIGNAL e=aexp { E_sig_create e } */
+| SIGNAL xs=separated_nonempty_list(COMMA,IDENT) IN e1=exp { 
+    List.fold_right (fun x acc ->
+            E_letIn(P_var x, new_ty_unknown(), E_sig_create (E_const (Unit)), acc))
+      xs e1 }
 | SIGNAL NEQ { E_sig_create (E_app(E_const (Op(Runtime(External_fun("Default.create",new_ty_unknown ())))),E_const(Unit))) }
 | e=aexp { e }
 | TRAP LPAREN RPAREN { E_trap(new_tyB_unknown(),gensym()) }
@@ -949,8 +951,9 @@ app_exp_desc:
 | TRAP x=IDENT IN e=exp { E_letIn(P_var x,new_ty_unknown(),E_trap(new_tyB_unknown(),gensym()), e) }
 | EXIT x=IDENT
 | EXIT x=UP_IDENT { E_exit(x,E_const(Unit)) }
-| SUSPEND e=app_exp WHEN x=IDENT { E_suspend(Ast.gensym(), e,x) }
+| SUSPEND e1=app_exp WHEN x=IDENT { E_suspend(Ast.gensym(), e1,x) }
 | AWAIT x=IDENT { E_await(x,Ast.gensym()) }
+| ABORT e1=app_exp WHEN x=IDENT { E_abort(e1,x,Ast.gensym()) }
 
 after_dot:
 | DOT x=IDENT { `R x }

@@ -76,8 +76,6 @@ let clean_fsm ~rdy ~result (ts,s) typing_env =
       Hashtbl.add vs_read compute ();
       List.iter (fun (_,s) -> collect_s s) ts;
       collect_s s
-  | S_in_fsm(id,s) ->
-      collect_s s
   | S_call(op,a) ->
       collect_read_a a
   | S_external_run(_,_,_,_,a) ->
@@ -122,8 +120,6 @@ let clean_fsm ~rdy ~result (ts,s) typing_env =
       S_letIn(x,a,clean s)
   | S_fsm(id,rdy,result,compute,ts,s) ->
       S_fsm(id,rdy,result,compute,List.map (fun (q,s) -> q, clean s) ts,clean s)
-  | S_in_fsm(id,s) ->
-      S_in_fsm(id,clean s)
   | S_call _ ->
       s
   | S_external_run _ -> s

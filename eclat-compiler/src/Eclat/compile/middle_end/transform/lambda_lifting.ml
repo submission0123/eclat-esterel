@@ -341,6 +341,9 @@ let globalize_e (e:e) : ((x * _ * e) list * e) =
         ds1,E_assert(e1',loc)
     | E_await(x,l) ->
         [],E_await(x,l)
+    | E_abort(e1,x,l) ->
+        let ds1,e1' = glob e1 in
+        [],E_abort(declare ds1 e1',x,l)
   in glob e
 
 

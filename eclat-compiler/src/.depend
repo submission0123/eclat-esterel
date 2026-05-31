@@ -163,7 +163,6 @@ src/Eclat/compile/backend/gen_BHDL.cmx : \
 src/Eclat/compile/backend/naming_convention.cmo :
 src/Eclat/compile/backend/naming_convention.cmx :
 src/Eclat/compile/compile.cmo : \
-    src/Eclat/typing/typing.cmo \
     src/Eclat/compile/middle_end/rename_main_arg.cmo \
     src/BHDL/optim/rbw_collection.cmo \
     src/prelude.cmo \
@@ -184,7 +183,6 @@ src/Eclat/compile/compile.cmo : \
     src/BHDL/optim/BHDL_propagation.cmo \
     src/Eclat/syntax/ast.cmo
 src/Eclat/compile/compile.cmx : \
-    src/Eclat/typing/typing.cmx \
     src/Eclat/compile/middle_end/rename_main_arg.cmx \
     src/BHDL/optim/rbw_collection.cmx \
     src/prelude.cmx \
@@ -221,13 +219,11 @@ src/Eclat/compile/instantaneous.cmx : \
 src/Eclat/compile/middle_end/analyses/causality_esterel.cmo : \
     src/prelude.cmo \
     src/Eclat/syntax/ast_subst.cmo \
-    src/Eclat/syntax/ast_pprint.cmo \
     src/Eclat/syntax/ast_mapper.cmo \
     src/Eclat/syntax/ast.cmo
 src/Eclat/compile/middle_end/analyses/causality_esterel.cmx : \
     src/prelude.cmx \
     src/Eclat/syntax/ast_subst.cmx \
-    src/Eclat/syntax/ast_pprint.cmx \
     src/Eclat/syntax/ast_mapper.cmx \
     src/Eclat/syntax/ast.cmx
 src/Eclat/compile/middle_end/analyses/check_exec_mem.cmo : \

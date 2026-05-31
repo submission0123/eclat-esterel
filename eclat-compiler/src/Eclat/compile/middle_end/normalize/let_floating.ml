@@ -172,6 +172,8 @@ let rec lfloat (e:e) : e =
       let ds,e1' = glob e1 in
       ds,E_assert(e1',loc)
   | E_await _ -> [],e
+  | E_abort(e1,x,l) -> 
+       [],E_abort(lfloat e1,x,l)
   in 
   let ds,e' = glob e in 
   declare ds e'

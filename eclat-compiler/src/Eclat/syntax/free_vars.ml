@@ -142,6 +142,8 @@ let fv ?(get_sig=true) ?(get_arrays=true) ?(xs=SMap.empty) e =
       aux xs e1
   | E_await(x,_) ->
       if get_sig then fv_var xs x else SMap.empty 
+  | E_abort(e1,x,_) ->
+      aux xs e1 ++ if get_sig then fv_var xs x else SMap.empty 
   in
   aux xs e
 
@@ -270,6 +272,8 @@ let fv_arrays ?(xs=SMap.empty) e =
   | E_assert(e1,_) ->
       aux xs e1
   | E_await _ -> SMap.empty
+  | E_abort(e1,x,_) ->
+      aux xs e1
   in
   aux xs e
 

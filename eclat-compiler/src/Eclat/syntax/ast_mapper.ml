@@ -136,6 +136,9 @@ let rec map f e =
       let e1' = f e1 in
       E_assert(e1',loc)
   | E_await _ -> e
+  | E_abort(e1,x,q) ->
+      let e1' = f e1 in
+      E_abort(e1',x,q)
 
 (** traversal order of sub-expressions is unspecified *)
 let rec iter f (e:e) : unit =
@@ -223,6 +226,8 @@ let rec iter f (e:e) : unit =
   | E_assert(e1,_) ->
       f e1
   | E_await _ -> ()
+  | E_abort(e1,_,_) ->
+      f e1
 
 let declare ds ts e =
   List.fold_right2 (fun (x,v) t e -> E_letIn(P_var x,t,v,e)) ds ts e
@@ -398,6 +403,9 @@ let accum f (e:e) =   (* : ((x * ty * e) list * e)*)
             let ds1,e1' = aux e1 in
             ds1,E_assert(e1',loc)
         | E_await _ -> [], e
+        | E_abort(e1,x,q) ->
+           let ds1,e1' = aux e1 in
+           [],E_abort(declare' ds1 e1',x,q)
     ) 
   in 
   aux e

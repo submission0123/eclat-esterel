@@ -1211,6 +1211,13 @@ let rec typ_exp ?(collect_sig=false) ~statics ~genv ~ctors ?(toplevel=false) ~lo
       let tyx = typ_ident ~loc g x in
       unify_ty ~loc (Ty_signal(TyB_bool)) tyx; (* todo loc of x *)
       (Ty_base TyB_unit, Dur_top)
+  | E_abort(e1,x,_) ->
+      let ty1,d1 = typ_exp ~collect_sig ~statics ~genv ~ctors
+                           ~toplevel:false ~loc:(loc_of e1) g e1 in
+      unify_ty ~loc (Ty_base(TyB_unit)) ty1;
+      let tyx = typ_ident ~loc g x in
+      unify_ty ~loc (Ty_signal(TyB_bool)) tyx; (* todo loc of x *)
+      (Ty_base TyB_unit, d1)
 
 let typing_handler ?(msg="") f () =
   let open Format in

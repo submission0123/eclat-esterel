@@ -168,6 +168,9 @@ let subst_e x ex e =
         let e1' = ss (0::id) e1 in
         E_suspend(q,e1',x)
     | E_await _ -> e
+    | E_abort(e1,x,q) ->
+       let e1' = ss (0::id) e1 in
+        E_abort(e1',x,q)
     | E_assert(e1,loc) ->
         let e1' = ss (0::id) e1 in
         E_assert(e1',loc)

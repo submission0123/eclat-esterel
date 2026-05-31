@@ -22,6 +22,12 @@ let rec instantiate ?(with_par=false) ?(with_pauses=false) ?(with_suspend=false)
       E_exec(inst e1,inst e2,Option.map inst eo,gen_label ())
   | E_reg((p,tyB,e1),e0,_) ->
       E_reg((p,tyB,inst e1),inst e0,gen_label ())
+  | E_await(x,l) ->
+     let l' = if with_par then gen_label () else l in
+     E_await(x,l')
+  | E_abort(e1,x,l) ->
+     let l' = if with_suspend then gen_label () else l in
+     E_abort(inst e1,x,l')
   | e -> Ast_mapper.map inst e
 
 let instantiate_pi pi =

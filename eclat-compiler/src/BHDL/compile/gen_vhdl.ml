@@ -9,6 +9,8 @@ let intel_max10_target = Gen_vhdl_aux.intel_max10_target
 let intel_xilinx_target = Gen_vhdl_aux.intel_xilinx_target
 let single_read_write_lock_flag = Gen_vhdl_aux.single_read_write_lock_flag
 
+let pp_sig_emitted fmt x = 
+  pp_ident fmt (x^"_emitted") 
 
 (** code generator for statements *)
 let rec pp_s ~genv ~st fmt = function
@@ -33,8 +35,9 @@ let rec pp_s ~genv ~st fmt = function
       Option.iter (fun s ->
         fprintf fmt "@[<v 2>when others =>@,%a@]@," (pp_s ~genv ~st) s) so;
       fprintf fmt "@]end case;")
+| S_set(_,A_const Unit) -> ()
 | S_set(x,a) -> fprintf fmt "@[<v>%a := %a;@]" pp_ident x (pp_a ~genv) a
-| S_sig_set(x,a) -> fprintf fmt "@[<v>%a <= %a;@]" pp_ident x (pp_a ~genv) a
+| S_sig_set(x,a) -> fprintf fmt "@[<v>%a <= %a;@]" pp_sig_emitted x (pp_a ~genv) a
 | S_acquire_lock(l) ->
       fprintf fmt
          "@[Lock.acquire(%a);@]" 
@@ -92,9 +95,6 @@ let rec pp_s ~genv ~st fmt = function
      let (st2,_,_) = List.assoc id !List_machines.extra_machines in
      pp_fsm ~genv fmt
         ~state_var:(st2) (*"state_"^id*) ~idle:cp ~rdy (id,ts,s)
-| S_in_fsm(id,s) ->
-     let (st2,_,_) = List.assoc id !List_machines.extra_machines in
-     pp_s ~genv ~st:st2 fmt s
 | S_array_set(x,y,a) ->
     fprintf fmt "@[%a(to_integer(unsigned(%a&\"000\"))) := %a;@]"
       pp_ident x
@@ -215,7 +215,7 @@ let pp_ty fmt t =
   | _ ->
       fprintf fmt "Values.t(0 to %d)" (size_ty t-1)
 
-let declare_signals others variables fmt =
+let declare_signals signals variables fmt =
   let var_decls = Hashtbl.create 10 in
   let add_var x n =
     match Hashtbl.find_opt var_decls n with
@@ -230,7 +230,8 @@ let declare_signals others variables fmt =
     ) variables;
   List.iter (fun (x,t) ->
       let n = (size_ty t) in
-      add_var x n) others;
+      add_var x n;
+      add_var (x^"_emitted") n) signals;
   Hashtbl.iter (fun n xs ->
       fprintf fmt "signal @[<v>@[<hov>%a@] : Values.t(0 to %d) := (others => '0');@]@,"
         (pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt ",@ @,") pp_ident) xs (n-1)
@@ -371,13 +372,13 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
   )
     @@ List.of_seq (Hashtbl.to_seq typing_env) in
   
-  let others = List.of_seq (Hashtbl.to_seq typing_env) |> 
-               List.filter (fun (x,t) -> (match t with TSig _ -> true | _ -> false)) in
+  let signals = List.of_seq (Hashtbl.to_seq typing_env) |> 
+                   List.filter (fun (x,t) -> (match t with TSig _ -> true | _ -> false)) in
 
   let variables_registers, variables_not_registers = 
     List.partition (fun (x,_) -> Ast.SMap.mem x registers) variables in
 
-  declare_signals others variables_registers fmt;
+  declare_signals signals variables_registers fmt;
 
   fprintf fmt "@,@[<v 2>begin@,";
 
@@ -492,7 +493,7 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
 
   List.iter (fun (x,_) -> fprintf fmt ", %a" pp_ident (x^"%now")) variables_registers;
 
-  List.iter (fun (x,_) -> fprintf fmt ", %a" pp_ident x) others;
+  List.iter (fun (x,_) -> fprintf fmt ", %a" pp_ident x) signals;
 
   (* *************** *)
   let sensibility_external fmt (n,(_,shared,_)) =    
@@ -532,10 +533,10 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
   begin
     let update fmt (x,_) = 
       if Ast.SMap.mem x !BHDL_typing.global_sigs  then () else
-      fprintf fmt "%a <= (others => '0');" pp_ident x
+      fprintf fmt "%a <= (others => '0');" pp_sig_emitted x
     in
     pp_print_list ~pp_sep:(fun fmt () -> fprintf fmt "@,")
-       update fmt others;
+       update fmt signals;
   end;
 
   List.iter (fun (x,st) ->
@@ -613,6 +614,8 @@ architecture rtl of %a is@,@[<v 2>@," pp_ident name;
      fprintf fmt "%a <= %a;@,@,"  pp_ident x pp_ident y 
   ) !BHDL_typing.global_sigs;
   
+  List.iter (fun (x,_) -> fprintf fmt "%a <= %a;@," pp_ident x pp_sig_emitted x) signals;
+
   fprintf fmt
     "
   end architecture;@]\n";

@@ -1,10 +1,11 @@
 -- code generated from the following source code:
 --   stdlib.ecl
---   ../examples/abcro.ecl
+--   ../examples/bench/lib.ecl
+--   ../examples/arbiter4.ecl
 --
 -- with the following command:
 --
---    ./eclat ../examples/abcro.ecl -noprint -top=sw:4|ledr:1
+--    ./eclat ../examples/bench/lib.ecl ../examples/arbiter4.ecl -noprint -top=sw:4|ledr:4 -clk-top=MAX10_CLK1_50
 
 
 library ieee;
@@ -22,11 +23,11 @@ architecture tb of tb_main is
       signal clk    : in std_logic;
       signal reset  : in std_logic;
       signal argument : in Values.t(0 to 3);
-      signal result : out Values.t(0 to 0));
+      signal result : out Values.t(0 to 3));
 end component;
   signal tb_argument: std_logic_vector(0 to 3) := (others => '0');
-  signal tb_result: std_logic_vector(0 to 0);
-  signal tb_next_result: std_logic_vector(0 to 0);
+  signal tb_result: std_logic_vector(0 to 3);
+  signal tb_next_result: std_logic_vector(0 to 3);
   signal tb_clk: std_logic;
   signal rst: std_logic;
   begin

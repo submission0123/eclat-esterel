@@ -105,8 +105,6 @@ let rec prop_s env s =
       S_fsm(id,rdy,result,compute,
             List.map (fun (q,s) -> q, prop_s env s) ts,
             prop_s env s)
-  | S_in_fsm(id,s) ->
-      S_in_fsm(id,prop_s env s)
   | S_call(op,a1) ->
       S_call(op,prop env a1)
   | S_external_run(f,i,res,rdy,a) ->
@@ -115,6 +113,7 @@ let rec prop_s env s =
       S_assert(prop env a1,loc)
   | S_record_update(xdst,xsrc,x,a,t) ->
       S_record_update(xdst,xsrc,x,prop env a,t)
+
 let propagation_s s =
   prop_s SMap.empty s
 

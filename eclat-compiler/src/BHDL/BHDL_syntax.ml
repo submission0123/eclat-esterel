@@ -81,7 +81,6 @@ type s = (* all instructions terminates in one clock cycle *)
   | S_seq of s * s
   | S_letIn of x * a * s
   | S_fsm of id * x * x * q * t list * s (* id * rdy * result * compute * transition * start instruction *)
-  | S_in_fsm of id * s
   | S_call of Operators.op * a
   | S_external_run of x * l * x * x * a (* (f,id,result,rdy,a) *)
   | S_sig_set of x * a
@@ -227,8 +226,6 @@ let pp_vector = Ast_pprint.pp_vector
       fprintf fmt "@[<v>let %s = %a in@,%a@]" x pp_a a pp_s s
   | S_fsm(id,_,result,_,ts,s) ->
       fprintf fmt "@[<v>{%s}((%s) -> %a)@]" id result pp_fsm (ts,s)
-  | S_in_fsm(id,s) ->
-      fprintf fmt "@[<v>%a in fsm %s@]" pp_s s id
   | S_call(op,a) ->
       fprintf fmt "@[%a(%a)@]" Operators.pp_op op pp_a a
   | S_external_run(f,l,res,rdy,a) ->

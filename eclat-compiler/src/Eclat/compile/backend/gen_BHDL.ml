@@ -4,6 +4,8 @@ let ref_set_lock_flag = ref false
 
 let optim_share_continuation = ref true
 
+let parallel_variant = ref true
+
 module NameC = Naming_convention
 
 module SMap = Map.Make(String)
@@ -78,35 +80,13 @@ let contains_return s =
   | S_if(_,s1,so2) -> aux s1 || (match so2 with None -> false | Some s -> aux s)
   | S_case(_,hs,so) ->
       List.exists (fun (_,s) -> aux s) hs || (match so with None -> false | Some s1 -> aux s1)
-  | S_fsm _ | S_in_fsm _ -> false (* ok? *)
+  | S_fsm _ -> false
   | S_external_run _ -> false
   | S_record_update _ -> false in
   aux s
 
-(* not complete *)
-let not_schizo e =
-  let exception Found in
-  let rec loop e =
-    match e with
-    | Ast.E_loop _ -> ()
-    | E_letIn(P_var _,_,E_sig_create _,_) -> raise Found
-    | E_letIn(P_var _,_,E_trap _,_) -> raise Found
-    | e -> Ast_mapper.iter loop e
-  in 
-  try (loop e; true) 
-  with Found -> false
 
-
-
-let find_ctor x sums =
-  let (n,sum,t) = Types.find_ctor x sums in
-  let t = Types.canon_tyB t in
-  let arg_size = List.fold_left (max) 0 @@ List.map (fun (_,t) -> BHDL_typing.(size_ty (translate_tyB (Types.canon_tyB t)))) sum in
-  let sz = BHDL_typing.compute_tag_size sum in
-  let n = if !Types.one_hot_encoding_flag then (1 lsl n) else n in
-  (mk_int n sz,arg_size,BHDL_typing.translate_tyB t)
-
-let rec insert_kont ~is_zero w ~idle ~x s =
+let rec insert_kont w s =
   let rec aux s =
     match s with
     | S_continue(id,q0) ->
@@ -134,7 +114,7 @@ let rec insert_kont ~is_zero w ~idle ~x s =
     | S_case(z,hs,so) -> S_case(z,List.map (fun (c,si) -> c, aux si) hs,Option.map aux so)
     | S_seq(s1,s2) ->  S_seq(aux s1,aux s2)
     | S_letIn(x,a,s) -> S_letIn(x,a,aux s)
-    | (S_fsm _ | S_in_fsm _) as s -> s (* already compiled *)
+    | S_fsm _ as s -> s (* already compiled *)
     | S_skip
     | S_acquire_lock _ 
     | S_release_lock _
@@ -152,6 +132,62 @@ let rec insert_kont ~is_zero w ~idle ~x s =
     | S_record_update _ -> s
   in
   aux s
+
+let loop_insert_kont wmain s =
+  let rec loop s =
+    let has_changed = ref false in
+    let s' = if contains_return s then ( 
+              has_changed := true;
+              insert_kont wmain s) else s in
+    if (!has_changed) then loop s' else s'
+  in loop s
+
+let make_fsm state rdy x idle w ts s s_star =
+  let wmain = SMap.add idle IMap.empty w in
+  let s' = loop_insert_kont wmain s in
+  let ts' = List.map (fun (q,s) -> q,loop_insert_kont wmain s) (SMap.bindings ts) in
+  seq_ (S_fsm(state,rdy,x,idle,ts',s')) (loop_insert_kont wmain s_star)
+
+
+let renaming e1 =
+  let open Ast in
+  let xs = vars_of_smap @@ Free_vars.fv ~get_sig:false ~get_arrays:false e1 in
+  let ys = List.map (fun x -> Ast.gensym ~prefix:x ()) xs in
+  let group xs = group_ps @@ List.map (fun x -> P_var x) xs in
+  let px = group xs in
+  let py = group ys in
+  let e1' = Ast_subst.subst_p_e px (Pattern.pat2exp py) e1 in
+  E_letIn(py,Types.new_ty_unknown(),(Pattern.pat2exp px),e1')
+
+
+
+let find_ctor x sums =
+  let (n,sum,t) = Types.find_ctor x sums in
+  let t = Types.canon_tyB t in
+  let arg_size = List.fold_left (max) 0 @@ List.map (fun (_,t) -> BHDL_typing.(size_ty (translate_tyB (Types.canon_tyB t)))) sum in
+  let sz = BHDL_typing.compute_tag_size sum in
+  let n = if !Types.one_hot_encoding_flag then (1 lsl n) else n in
+  (mk_int n sz,arg_size,BHDL_typing.translate_tyB t)
+
+
+let side_effect ~externals e =
+  let open Ast in
+  let exception Found in
+  let rec loop e =
+    match e with
+    | E_get _ | E_set _ | E_array_get _ | E_array_set _ 
+    | E_array_get_start _ | E_array_get_end _ 
+    | E_array_set_immediate _ | E_array_from_file _ ->
+        raise Found
+    |E_app(e1,_) ->
+      (match un_deco e1 with
+      | E_const(Op op) ->
+          if Instantaneous.op_combinational ~externals op then () else raise Found
+      | _ -> Ast_mapper.iter loop e)
+    | e -> Ast_mapper.iter loop e
+  in 
+  try (loop e; false) 
+  with Found -> true
 
 let rec to_c ~genv = function
 | Ast.Unit -> Unit
@@ -176,7 +212,7 @@ let rec to_c ~genv = function
 
 let to_op = function
 | Ast.TyConstr ty -> TyConstr (BHDL_typing.translate_ty ty)
-| Ast.Runtime (External_fun(x,ty)) -> Runtime (External_fun(x,ty)) (* Types.new_ty_unknown())) *)
+| Ast.Runtime (External_fun(x,ty)) -> Runtime (External_fun(x,ty))
 | Ast.Runtime p -> Runtime p
 | Ast.GetTuple {pos=i;arity=n} -> GetTuple (i,n,new_tvar())
 | Ast.Int_of_size _ -> assert false
@@ -264,12 +300,12 @@ let [@warning "-26"] show q w =
                         Printf.printf "]}\n") w
 
 
-(** [to_s id ~is_zero ~statics ~externals gs e x k] translates expression [e] 
+(** [to_s state ~statics ~externals gs e x k] translates expression [e] 
     to a target instruction setting a result in variable [x], 
     then executing instruction [k].
     [gs] is the names of the functions accessible 
     from [e] by a tail-call *)
-let rec to_s id ~is_zero ~genv gs e x k =
+let rec to_s state ~genv gs e x k =
   let return_ s = seq_ s k in
   if Instantaneous.combinational ~externals:Ast.(genv.operators) e then 
     SMap.empty,SMap.empty,return_ (set_ x (to_a ~genv e)), S_skip
@@ -280,8 +316,8 @@ let rec to_s id ~is_zero ~genv gs e x k =
       let go = Ast.gensym ~prefix:"go" () in
       let s_star = let_plug_s (A_sig_get go) (fun z -> S_if(z, k, None)) in
       let k' = (S_sig_set(go,A_const (Bool true))) in
-      let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 x k' in
-      let w2,ts2,s2,s_star2 = to_s id ~is_zero ~genv gs e2 x k' in
+      let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 x k' in
+      let w2,ts2,s2,s_star2 = to_s state ~genv gs e2 x k' in
       let z = Ast.gensym () in
       (w1++>w2),(ts1 ++ ts2),S_letIn(z,to_a ~genv a,S_if(z,s1,Some s2)),seq_ s_star1 (seq_ s_star2 s_star)
   | E_case(a,hs,e_els) ->
@@ -290,12 +326,12 @@ let rec to_s id ~is_zero ~genv gs e x k =
       let s_star_go = let_plug_s (A_sig_get go) (fun z -> S_if(z, k, None)) in
       let k' = (S_sig_set(go,A_const (Bool true))) in
       let ws,tss,hs',s_stars = Prelude.map_split4 (fun (cs,e) ->
-                                 let w,ts,s,s_star = to_s id ~is_zero ~genv gs e x k' in
+                                 let w,ts,s,s_star = to_s state ~genv gs e x k' in
                                  w,ts,(List.map (to_c ~genv) cs,s),s_star
                              ) hs
       in
       let ts = List.fold_left (++) SMap.empty tss in
-      let w1,ts1,s1,s_star_1 = to_s id ~is_zero ~genv gs e_els x k' in
+      let w1,ts1,s1,s_star_1 = to_s state ~genv gs e_els x k' in
       let w' = List.fold_left (++>) w1 ws in
       let s_plus = seq_ (seq_ (seq_list_ s_stars) s_star_1) s_star_go in
       w',ts1 ++ ts,(let z = Ast.gensym () in
@@ -310,7 +346,7 @@ let rec to_s id ~is_zero ~genv gs e x k =
       let ws,tss,hs',s_stars = 
         Prelude.map_split4 (fun (inj,(py,e)) ->
                                  let y = match py with Ast.P_var y -> y | _ -> assert false in
-                                 let w,ts,s,s_star = to_s id ~is_zero ~genv gs e x k' in
+                                 let w,ts,s,s_star = to_s state ~genv gs e x k' in
                                  let n,_,ty_n = find_ctor inj genv.sums in
                                  w,ts,([n],(seq_ (set_ y (A_decode(z2,ty_n))) @@ s)),s_star
                        ) hs
@@ -320,7 +356,7 @@ let rec to_s id ~is_zero ~genv gs e x k =
                                         (* Some skip rather than None because
                                            the number of cases in the generated code
                                            must be a power of 2 *)
-                               | Some e -> let w,ts,s,s_star = to_s id ~is_zero ~genv gs e x k in
+                               | Some e -> let w,ts,s,s_star = to_s state ~genv gs e x k in
                                            (w,ts,Some s,s_star)
       in
       let ts = List.fold_left (++) tsn tss in
@@ -333,64 +369,78 @@ let rec to_s id ~is_zero ~genv gs e x k =
              S_letIn(z2,A_call((to_op @@ (GetTuple{pos=1;arity=2}),A_var z)),
              S_case(z1,hs',so))))),s_plus
   | E_letIn(P_var y,_,E_sig_create(ey),e1) ->
-      let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 x k in
+      let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 x k in
       w1,ts1,(* seq_ (S_sig_set(y,to_a ~externals ~sums ey))*) s1,s_star1
 
   | E_letIn(P_var f,_,E_trap(_,l),e2) ->
-      let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e2 x (S_sig_set(f,A_const (Bool true))) in
-      let s_plus = seq_ s_star1 (let_plug_s (A_sig_get f) (fun zz -> S_if(zz, k,None))) in
+      (****** cancel pending memory transaction *******)
+      let ys = Free_vars.fv_arrays e2 in
+      let ys = List.map fst @@ SMap.bindings @@ ys in
+      let s_star_restart = seq_list_ @@ 
+        List.map (fun x -> seq_ (S_release_lock(x)) @@ (S_write_stop(x))) ys in
+      (************************************************)
+      let w1,ts1,s1,s_star1 = to_s state ~genv gs e2 x (S_sig_set(f,A_const (Bool true))) in
+      let s_plus = seq_ s_star1 (let_plug_s (A_sig_get f) (fun zz -> S_if(zz, (seq_ s_star_restart k),None))) in
       w1,ts1,s1,s_plus 
   | E_exit(f,_) ->
       SMap.empty, SMap.empty, (S_sig_set(f,A_const (Bool true))),S_skip
   | E_suspend(q,e1,y) ->
       let rdy = Ast.gensym ~prefix:"rdy" () in
-      let id' = q^"inner" in
-      let w,ts,s,s_star = to_s id' ~is_zero:false ~genv gs e1 x (S_sig_set(rdy, A_const (Bool true))) in
-      let s' = S_fsm(id',Ast.gensym(),x,Ast.gensym (),SMap.bindings ts,S_skip) in
-      let s_plus = seq_ s_star (let_plug_s (A_sig_get rdy) (fun z -> S_if(z, k, Some(S_continue(id,q))))) in
-      (w,SMap.singleton q (let_plug_s (A_sig_get y) (fun z -> S_if(z, S_skip,Some(s')))),s,s_plus)
+      let inner = q^"inner" in
+      let w,ts,s,s_star = to_s inner ~genv gs e1 x (S_sig_set(rdy, A_const (Bool true))) in (*todo, insert_kont *)
+      let s' = S_fsm(inner,Ast.gensym(),x,Ast.gensym (),SMap.bindings ts,S_skip) in
+      let s_plus = seq_ s_star (let_plug_s (A_sig_get rdy) (fun z -> S_if(z, k, None))) in
+      (w,SMap.singleton q (let_plug_s (A_sig_get y) (fun z -> S_if(z, S_skip,Some(s')))),seq_ s (S_continue(state,q)),s_plus)
+| E_abort(e1,y,q) -> (** y not checked in first cycle (like await) **)
+      let rdy = Ast.gensym ~prefix:"rdy" () in
+      let inner = q^"inner" in
+      let w,ts,s,s_star = to_s inner ~genv gs e1 x (S_sig_set(rdy, A_const (Bool true))) in (*todo, insert_kont *)
+      let s' = S_fsm(inner,Ast.gensym(),x,Ast.gensym (),SMap.bindings ts,S_skip) in
+      let s_plus = seq_ s_star (let_plug_s (A_sig_get rdy) (fun z -> S_if(z,k, None))) in
+      (w,SMap.singleton q (let_plug_s (A_sig_get y) (fun z -> S_if(z, (S_sig_set(rdy, A_const (Bool true))),Some(s')))),seq_ s (S_continue(state,q)),s_plus)
+
   | E_loop(e1) ->
       let e1' = Instantiate.instantiate ~with_par:false ~with_pauses:false @@ 
                Ast_rename.rename_trap_and_signals ~statics:genv.statics (Check_pauses_loop.surface e1) in
       let z = Ast.gensym ~prefix:"z" () in
-      let _,_,s2,s_plus = to_s id ~is_zero:false ~genv gs e1' z S_skip in
-      let w1,ts1,s1,s_star = to_s id ~is_zero:false ~genv gs e1 x s2 in
+      let _,_,s2,s_plus = to_s state ~genv gs e1' z S_skip in
+      let w1,ts1,s1,s_star = to_s state ~genv gs e1 x s2 in
       w1,ts1, s1, seq_ s_star s_plus
   | E_pause(l,e1) ->
-      let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 x (S_continue(id,l)) in
+      let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 x (S_continue(state,l)) in
       (* let ts1' = if endloop then ts1 else SMap.add l k ts1 in *)
       let ts1' = SMap.add l k ts1 in
       (w1,ts1', s1,s_star1)
   | E_emit(x,ey) ->
        SMap.empty,SMap.empty,(return_ @@ S_sig_set(x,to_a ~genv ey)), S_skip
-  | E_await(x,l) ->
-      SMap.empty, SMap.singleton l (let_plug_s (A_sig_get x) (fun z -> S_if(z, k,  Some (S_continue(id,l))))), S_continue(id,l), S_skip
+  | E_await(x,q) ->
+      SMap.empty, SMap.singleton q (let_plug_s (A_sig_get x) (fun z -> S_if(z, k,  None))), S_continue(state,q), S_skip
   | E_letIn(P_var f,_,(E_fix(h,(p,_,e1)) as phi),e2) ->
      assert (f = h);
      let e1 = replace_arg phi in
      let f' = NameC.mark_return f in
-     let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv (f::gs) e1 (NameC.result_of_fun f) (S_continue(id, f')) in
-     let w2,ts2,s2,s_star2 = to_s id ~is_zero ~genv gs e2 x k in
+     let w1,ts1,s1,s_star1 = to_s state ~genv (f::gs) e1 (NameC.result_of_fun f) (S_continue(state, f')) in
+     let w2,ts2,s2,s_star2 = to_s state ~genv gs e2 x k in
      (w1++>w2),(SMap.add f s1 ts1)++ts2,s2,seq_ s_star1 s_star2
   | E_letIn(P_unit,_,e1,e2) ->
       (* [SEQ] *)
-      let w2,ts2,s2,s_star2 = to_s id ~is_zero ~genv gs e2 x k in
+      let w2,ts2,s2,s_star2 = to_s state ~genv gs e2 x k in
       if Instantaneous.combinational ~externals:genv.operators e1 then (* todo: emit a warning ? *) (w2,ts2,s2,s_star2) else
-      let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 (Ast.gensym ()) s2 in
+      let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 (Ast.gensym ()) s2 in
       w1++>w2,ts2++ts1,s1,seq_ s_star1 s_star2
   | E_letIn(P_var y,_,e1,e2) ->
       (* [LET] *)
-      let w2,ts2,s2,s_star2 = to_s id ~is_zero ~genv gs e2 x k in
+      let w2,ts2,s2,s_star2 = to_s state ~genv gs e2 x k in
       if Instantaneous.combinational ~externals:genv.operators e1 then
         w2,ts2,seq_ (set_ y (to_a ~genv e1)) s2,s_star2
       else
-        let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 y s2 in
+        let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 y s2 in
         w1++>w2,ts2++ts1,s1,seq_ s_star1 s_star2
   | E_app(E_var f,a) ->
       if List.mem f gs then
           (* [TAIL-CALL] *)
           let s = seq_ (set_ (NameC.formal_param_of_fun f) (to_a ~genv a)) @@
-                        S_continue(id,f) in
+                        S_continue(state,f) in
            (SMap.empty,SMap.empty,s,S_skip)
       else
           (* [DIRECT-CALL] *)
@@ -398,7 +448,7 @@ let rec to_s id ~is_zero ~genv gs e x k =
           let w = SMap.singleton (NameC.mark_return f) (IMap.singleton n (seq_ (set_ x (A_var (NameC.result_of_fun f))) k)) in
           let s = seq_ (set_ (NameC.instance_id_of_fun f) (A_const (mk_int n id_size))) @@
                   seq_ (set_ (NameC.formal_param_of_fun f) (to_a ~genv a)) @@
-                       S_continue(id,f) in
+                       S_continue(state,f) in
           (w,SMap.empty,s,S_skip)
   | E_app(E_const(Op((Runtime _) as op)),a) ->
       (* in case of instantaneous call which is not combinatorial,
@@ -413,7 +463,7 @@ let rec to_s id ~is_zero ~genv gs e x k =
       | E_var y ->
          if !ref_set_lock_flag then
            let q_wait = Ast.gensym ~prefix:"get_wait" () in
-           let s0 = S_if(y^"_lock", (S_continue(id,q_wait)), Some (
+           let s0 = S_if(y^"_lock", (S_continue(state,q_wait)), Some (
                            (return_ (set_ x (A_var y))))) in
             (SMap.empty, SMap.add q_wait s0 SMap.empty, s0, S_skip)
          else
@@ -425,16 +475,16 @@ let rec to_s id ~is_zero ~genv gs e x k =
        | E_var y ->
           let q_wait = Ast.gensym ~prefix:"get_wait" () in
           let q1 = Ast.gensym ~prefix:"get_pause" () in
-          let w,ts,s,s_star = to_s id ~is_zero ~genv gs (E_const Unit) x k in
+          let w,ts,s,s_star = to_s state ~genv gs (E_const Unit) x k in
           let s0 = S_if(y^"_lock", 
-                       S_continue(id,q_wait), Some(seq_ (set_ (y^"_lock") (A_const (Bool true))) @@
-                        seq_ (set_ y (to_a ~genv a)) @@ (S_continue(id,q1)))) in
+                       S_continue(state,q_wait), Some(seq_ (set_ (y^"_lock") (A_const (Bool true))) @@
+                        seq_ (set_ y (to_a ~genv a)) @@ (S_continue(state,q1)))) in
           (w, (SMap.add q1 (seq_ (set_ (y^"_lock") (A_const (Bool false))) s) @@
                SMap.add q_wait s0 ts), s0, s_star)
        | _ -> assert false) else
       (match ay with
        | E_var y ->
-          let w,ts,s,s_star = to_s id ~is_zero ~genv gs (E_const Unit) x k in
+          let w,ts,s,s_star = to_s state ~genv gs (E_const Unit) x k in
           (w, ts, seq_ (set_ y (to_a ~genv a)) s, s_star)
        | _ -> assert false)
   | E_array_get((y,_),idx) ->
@@ -444,10 +494,10 @@ let rec to_s id ~is_zero ~genv gs e x k =
                   seq_ (S_read_stop(x,y)) 
                        (S_release_lock(y))) SMap.empty in 
       let s = seq_ (S_acquire_lock(y)) @@
-              seq_ (S_read_start(y,a)) (S_continue(id, q)) in
+              seq_ (S_read_start(y,a)) (S_continue(state, q)) in
         let q_wait = Ast.gensym ~prefix:"q_wait" () in
         let s' = let_plug_s (A_ptr_taken(y)) @@ fun z ->
-                 S_if(z, (S_continue(id,q_wait)), Some s) in
+                 S_if(z, (S_continue(state,q_wait)), Some s) in
         (SMap.empty, SMap.add q_wait s' ts, s',S_skip)
   | E_array_set((y,_),idx,e_upd) ->
       let a = to_a ~genv idx in
@@ -459,10 +509,10 @@ let rec to_s id ~is_zero ~genv gs e x k =
                         set_ x (A_const Unit))) SMap.empty  in
       let q_wait = Ast.gensym ~prefix:"q_wait" () in
       let s' = let_plug_s (A_ptr_taken(y)) @@ fun z ->
-                 S_if(z, (S_continue(id,q_wait)),
+                 S_if(z, (S_continue(state,q_wait)),
                            Some (seq_ (S_acquire_lock(y)) @@
                                  seq_ (S_write_start(y,a,a_upd)) @@
-                                      (S_continue(id,q)))) in
+                                      (S_continue(state,q)))) in
       (SMap.empty, SMap.add q_wait s' ts, s',S_skip)
       (* todo: pas besoin de dupliquer s': l'écriture en tant que telle ne prend que 1 cycle : on peut la faire démarrer un cycle plus tard *)
 
@@ -488,98 +538,122 @@ let rec to_s id ~is_zero ~genv gs e x k =
       let ts = SMap.add q1 (seq_ (S_release_lock(y)) @@
                                  (return_ @@ seq_ (set_ x (A_const Unit)) s0)) 
                SMap.empty  in
-      let s = (S_continue(id,q1)) in
+      let s = (S_continue(state,q1)) in
       let q_wait = Ast.gensym ~prefix:"q_wait" () in
       let s' = let_plug_s (A_ptr_taken(y)) @@ fun z ->
-                 S_if(z, (S_continue(id,q_wait)),
+                 S_if(z, (S_continue(state,q_wait)),
                            Some (seq_ (S_acquire_lock(y)) @@ s)) in
       (SMap.empty, SMap.add q_wait s' ts, s',S_skip)
-  | E_reg((p,_,e1),e0,l) ->
+   | E_reg((p,_,e1),e0,l) ->
      let y = match p with
               | P_var y -> y 
               | _ -> assert false 
       in
-      if is_zero then
-        (* ******** instantaneous ******** *)
-        let rec is_default e = 
-         let exception Found in 
-         try let c = Ast.e2c e in
-         let rec w_c = function
-                      | Ast.Unit -> ()
-          | Ast.Int (0,_) -> () 
-                      | Ast.Bool false -> ()
-                      | Ast.C_tuple cs | Ast.C_vector cs -> List.iter w_c cs
-                      | _ -> raise Found in  w_c c ; true with Ast.Not_a_constant | Found -> false
-        in
-        if is_default e0 then
-          (** optimization, avoid extra register [l] for initialization *)
-          let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv [] e1 y S_skip in
-          assert (SMap.is_empty w1 (* && SMap.is_empty ts1)*));
-          (SMap.empty, ts1,
-          (seq_ s1 @@
-          return_ @@ set_ x (A_var y)),s_star1)
-        else
-          let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv [] e1 y S_skip in
-          let w0,ts0,s0,s_star0 = to_s id ~is_zero ~genv [] e0 y S_skip in
-          assert (SMap.is_empty w1 (* && SMap.is_empty ts1*));
-          assert (SMap.is_empty w0 (* && SMap.is_empty ts0*));
-          (SMap.empty, ts1++ts0,
-          (seq_ (S_if(l, S_skip, Some (seq_ (set_ l (A_const (Bool true))) s0))) @@
-          seq_ s1 @@
-          return_ @@ set_ x (A_var y)),seq_ s_star0 s_star1)
+      let rec is_default e = 
+       let exception Found in 
+       try let c = Ast.e2c e in
+       let rec w_c = function
+                    | Ast.Unit -> ()
+        | Ast.Int (0,_) -> () 
+                    | Ast.Bool false -> ()
+                    | Ast.C_tuple cs | Ast.C_vector cs -> List.iter w_c cs
+                    | _ -> raise Found in  w_c c ; true with Ast.Not_a_constant | Found -> false
+      in
+      if is_default e0 then
+        (** optimization, avoid extra register [l] for initialization *)
+        let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 y (return_ (set_ x (A_var y))) in
+        w1,ts1,s1,s_star1
       else
-        (* ******** multi-cycle ******** *)
-        let w1,ts1,s1,s_star1 = to_s id ~is_zero ~genv gs e1 y (return_ (set_ x (A_var y))) in
-        let w0,ts0,s0,s_star0 = to_s id ~is_zero:true ~genv [] e0 y S_skip in
-        assert (SMap.is_empty w0 && SMap.is_empty ts0);
+        let w1,ts1,s1,s_star1 = to_s state ~genv gs e1 y (return_ (set_ x (A_var y))) in
+        let w0,ts0,s0,s_star0 = to_s state ~genv [] e0 y S_skip in
         w1++>w0,ts1,(seq_ (S_if(l, S_skip, Some (seq_ (set_ l (A_const (Bool true))) s0))) s1),seq_ s_star0 s_star1
+
   | E_exec(e1,e0,eo,l) ->
-      (* assume e0 is combinational *)
-      let pi = Ast.{genv;main=e1} in
-      let id' = Ast.gensym ~prefix:"id" () in
-      let _,rdy,res,idle,(ts,s1),s_star = compile id' ~is_zero:false (* ~result:x*) pi in
-      let s1' = seq_ (S_fsm(id',rdy,res,idle,ts,s1)) s_star in
-      let s2 = return_ (let_plug_s (A_sig_get rdy) (fun zz -> S_if(zz, (set_ x @@ A_tuple[A_var res;A_sig_get rdy]), 
-                                                                        Some (set_ x @@ A_tuple[to_a ~genv e0;A_sig_get rdy])))) in
-      let s = seq_ s1' s2 in
-      (match eo with
-      | None -> (SMap.empty, SMap.empty, s,S_skip)
-      | Some e3 ->
-         (* assume e3 is combinational *)
-         let s_not_rdy = let_plug_s (to_a ~genv e3) (fun zz ->
-                            S_if(zz, S_continue(id',idle), None)) in
-         let s4 = seq_ (S_if(rdy, S_skip, Some(seq_ (set_ res (to_a ~genv e0)) s_not_rdy))) @@
-               return_ @@ set_ x (A_tuple[A_var res;A_sig_get rdy]) in
-          let s5 = seq_ s1' s4 in
-          (SMap.empty, SMap.empty, s5,s_star))
-  | E_par(q,es) -> (* a room for optimization, e.g., push parallel branch in tail to avoid sequences of synchronizers *)
-      let pi_s = List.mapi (fun i e -> compile (q^string_of_int i) ~is_zero:false @@ Ast.{genv;main=e}) es in      
+      let inner = Ast.gensym ~prefix:"inner" () in
+      let rdy = Ast.gensym ~prefix:"rdy" () in
+      let idle' = Ast.gensym ~prefix:"idle" () in
+      let z = Ast.gensym ~prefix:"z" () in
+      let e1_ren = renaming e1 in
+      let w,ts,s,s_star = to_s inner ~genv [idle'] e1_ren z (seq_ (S_sig_set(rdy,A_const (Bool true))) @@ S_continue(inner,idle')) in
+      let fsm = make_fsm inner rdy z idle' w ts s s_star in
+      let s' = seq_ fsm @@
+               seq_ (let_plug_s (A_sig_get rdy) (fun zz ->
+                     S_if(zz,(set_ x @@ A_tuple[A_var z;A_const (Bool true)]),
+                          Some(set_ x @@ A_tuple[to_a ~genv e0;A_const (Bool false)])))) @@ k 
+      in
+      let s'' = match eo with
+                 | None -> s'
+                 | Some e3 -> (** reinitialize the computation as soon as [e3] is [true] **)
+                    seq_ (let_plug_s (to_a ~genv e3) (fun v ->
+                          S_if(v, S_continue(inner,idle'), None))) s'
+      in
+      (SMap.empty, SMap.empty, s'',S_skip)
+
+
+| E_par(q,es) ->
+      let compile i e_i =
+        let id = string_of_int i in
+        let inner = q^id in
+        let rdy = Ast.gensym ~prefix:"rdy" () in
+        let idle = "idle"^id in
+        let result = Ast.gensym ~prefix:"result" () in
+        let w,ts,s,s_star = to_s inner ~genv [idle] e_i result 
+           (seq_ (S_sig_set(rdy,A_const (Bool true))) @@ S_continue(inner,idle)) in
+        let wmain = SMap.add idle IMap.empty w in
+        let f s = loop_insert_kont wmain s in
+        (inner,rdy,result,idle,(List.map (fun (q,s) -> q, f s) (SMap.bindings ts),f s),f s_star)
+      in
+      let pi_s = List.mapi compile es in
       let rdys = List.map (fun (_,rdy_i,_,_,_,_) -> A_sig_get rdy_i) pi_s in
-      let s_star = List.map (fun (_,_,_,_,_,s_star) -> s_star) pi_s |> List.fold_left seq_ S_skip in
       let ress = List.map (fun (_,_,res_i,_,_,_) -> A_var res_i) pi_s in
-      let s_plus = seq_ s_star @@ let_plug_s (conjonction_atoms rdys) (fun z ->
-                  S_if(z, (seq_ (S_set(x,(A_tuple ress))) @@ k),Some (S_continue(id,q)))) in
-      let ts = SMap.singleton q (
-        let s_list' = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) -> 
-                         (S_fsm(id_i,rdy_i,res_i,idle_i,ts_i,S_sig_set(rdy_i,(A_const (Bool true)))))) pi_s
-        in (seq_list_ s_list')
-      ) in
-      let s_inFsm_list = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) ->
-                                   s_i) pi_s in
-      SMap.empty,ts,  (seq_list_ s_inFsm_list),s_plus
+      let s_plus = let_plug_s (conjonction_atoms rdys) (fun z ->
+                           S_if(z, (seq_ (S_set(x,(A_tuple ress))) @@ k),None)) in
+      if side_effect ~externals:(genv.operators) e then 
+        let ts = SMap.singleton q (
+          let s_list' = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),s_star) -> 
+                           seq_ (S_fsm(id_i,rdy_i,res_i,idle_i,ts_i,S_sig_set(rdy_i,(A_const (Bool true))))) s_star) pi_s
+          in (seq_list_ s_list')
+        ) in
+        let s_inFsm_list = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),s_star) ->
+                                     seq_ s_i s_star) pi_s in
+        SMap.empty,ts, seq_ (seq_list_ s_inFsm_list) (S_continue(state,q)), s_plus
+      else if !parallel_variant then
+        (****** variant using an additional finalization signal ********)
+        (****** gives slightly better results (area, register, frequency) 
+                with the Quartus Prime synthesizer *********************)
+        let go = Ast.gensym ~prefix:"go" () in
+        let s_star = List.map (fun (_,_,_,_,_,s_star) -> s_star) pi_s |> List.fold_left seq_ S_skip in
+        let s_plus = seq_ s_star @@ let_plug_s (A_sig_get go) (fun z -> S_if(z, 
+                      let_plug_s (conjonction_atoms rdys) (fun z ->
+                        S_if(z, (seq_ (S_set(x,(A_tuple ress))) @@ k),Some (S_continue(state,q)))), None))  in
+        let ts = SMap.singleton q (
+          let s_list' = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) -> 
+                           (S_fsm(id_i,rdy_i,res_i,idle_i,ts_i,S_sig_set(rdy_i,(A_const (Bool true)))))) pi_s
+          in seq_ (seq_list_ s_list') (S_sig_set(go,(A_const (Bool true))))
+        ) in
+        let s_inFsm_list = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) -> s_i) pi_s in
+        SMap.empty,ts,  seq_ (seq_list_ s_inFsm_list) (S_sig_set(go,(A_const (Bool true)))),s_plus
+        (****************************************************************)
+      else
+        let s_star = List.map (fun (_,_,_,_,_,s_star) -> s_star) pi_s |> List.fold_left seq_ S_skip in
+        let ts = SMap.singleton q (
+          let s_list' = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) -> 
+                           (S_fsm(id_i,rdy_i,res_i,idle_i,ts_i,S_sig_set(rdy_i,(A_const (Bool true)))))) pi_s
+          in (seq_list_ s_list')
+        ) in
+        let s_inFsm_list = List.map (fun (id_i,rdy_i,res_i,idle_i,(ts_i,s_i),_) -> s_i) pi_s in
+        SMap.empty,ts,  seq_ (seq_list_ s_inFsm_list) (S_continue(state,q)),seq_ s_star s_plus
   | E_for(y,e1,e2,e3,sz,loc) ->
       let q1 = Ast.gensym ~prefix:"forloop" () in
-      let s1 = seq_ (set_ y (to_a  ~genv e1)) @@ S_continue(id, q1) in
+      let s1 = seq_ (set_ y (to_a  ~genv e1)) @@ S_continue(state, q1) in
       let a2 = to_a ~genv e2 in
-      let w3,ts3,s3,s_star3 = to_s id ~is_zero ~genv gs e3 x 
+      let w3,ts3,s3,s_star3 = to_s state ~genv gs e3 x 
                          (seq_ (set_ y (A_call(Runtime (External_fun("Int.add",Types.new_ty_unknown())),A_tuple[A_var y;A_const (Int {value=1;tsize=(new_tvar())})]))) @@
-                               (S_continue(id, q1))) in
+                               (S_continue(state, q1))) in
       let s2 = let_plug_s (A_call(Runtime (External_fun("Int.le",Types.new_ty_unknown())),A_tuple[A_var y;a2])) @@ fun z ->
                 S_if(z,s3,Some k) in
       w3,(SMap.add q1 s2 ts3),s1,s_star3
-     
   | E_parfor _ -> assert false (* already expanded *)
- 
   | E_fun _ | E_fix _ -> 
      (* can occur in case of higher order function that does not use its argument,
         e.g.: [let rec f g = f g in f (fun x -> x)].
@@ -605,7 +679,7 @@ let rec to_s id ~is_zero ~genv gs e x k =
               let external_rdy = Ast.gensym ~prefix:"external_rdy" () in
               let s = seq_ (S_external_run(f,id,external_result,external_rdy,args)) @@
                             S_if(external_rdy,return_ (set_ x (A_var external_result)),
-                              Some (S_continue(id, q1))) in 
+                              Some (S_continue(state, q1))) in 
               let ts = SMap.add q1 s SMap.empty in 
               (SMap.empty, ts, s,S_skip)
             else 
@@ -616,11 +690,11 @@ let rec to_s id ~is_zero ~genv gs e x k =
               let s = seq_ (S_external_run(f,id,external_result,external_rdy,args)) @@
                             S_if(external_rdy,return_ (seq_ (S_release_lock(f)) @@ 
                                                        set_ x (A_var external_result)),
-                              Some (S_continue(id,q1))) 
+                              Some (S_continue(state,q1))) 
               in
               let s0 = let_plug_s (A_ptr_taken(f)) @@ fun z ->
-                       S_if(z,S_continue(id, qwait),
-                          Some (seq_ (S_acquire_lock(f)) @@ S_continue(id, q1))) in
+                       S_if(z,S_continue(state, qwait),
+                          Some (seq_ (S_acquire_lock(f)) @@ S_continue(state, q1))) in
               let ts = SMap.add q1 s @@
                        SMap.add qwait s0 SMap.empty in 
               (SMap.empty, ts, s0,S_skip)
@@ -638,45 +712,13 @@ let rec to_s id ~is_zero ~genv gs e x k =
 
   | e -> Ast_pprint.pp_exp Format.std_formatter e; assert false (* todo *)
 
-(* takes a program and translates it into an FSM *)
-
-and compile id ?(traps=[]) ?(result="result_"^id) ~is_zero pi =
-  let open Ast in
-  
-  let x = result in
-  let rdy = Ast.gensym ~prefix:("rdy_"^id)() in
-  let idle = "idle_"^id in
-
-  let e = pi.main in
-  let xs = vars_of_smap @@ Free_vars.fv ~get_sig:false ~get_arrays:false pi.main in
-  let ys,zs = List.split @@ (List.map (fun x -> x,Ast_rename.rename_ident ~statics:pi.genv.statics x) xs) in
-  let py,pz = let f xs = group_ps @@ List.map (fun x -> P_var x) xs in (f ys, f zs) in
-  let e_ren = Ast_subst.subst_p_e py (Pattern.pat2exp pz) e in
-  
-  let k = (*if endloop then S_skip else *) seq_ (S_sig_set(rdy,(A_const (Bool true)))) (S_continue(id,idle)) in
-  
-  let w0,ts0,s0,s_star0 = to_s id ~is_zero ~genv:pi.genv [idle] e_ren x k in
-  let s0 = List.fold_left2 (fun s y z -> seq_ (set_ z (A_var y)) s) s0 ys zs in
-
-  let wmain = SMap.add idle IMap.empty w0 in
-  let loop_insert_kont s =
-    let rec loop s =
-      let has_changed = ref false in
-      let s' = if contains_return s then ( 
-                has_changed := true;
-                insert_kont ~is_zero wmain ~idle ~x s) else s in
-      if (!has_changed) then loop s' else s'
-    in loop s
-  in
-  let s' = loop_insert_kont s0 in
-  let ts_res = (SMap.bindings ts0) in
-  let ts_res = List.map (fun (q_aux,s) -> q_aux, loop_insert_kont s) ts_res in
-
-  (* let after = List.fold_left (fun acc s -> seq_ s acc) S_skip !kont_accum in *)
-  id,rdy,x,idle,(ts_res,(* seq_ (set_ rdy (A_const (Bool false)))*) s'), loop_insert_kont s_star0 (* loop_insert_kont after *)
-
-and main id  ?(result="result_"^id) ~is_zero pi =
-  let id' = Ast.gensym () in
-  let _,rdy,res,idle,(ts,s1),s_star = compile id' ~traps:[] ~result ~is_zero pi in
-  let ss = seq_ (S_fsm(id',rdy,res,idle,ts,s1)) s_star in
-  id,Ast.gensym ~prefix:"rdy"(),res,Ast.gensym ~prefix:"idle"(),([],ss),s_star
+let main ?(id="state") ?(result="result_"^id) pi =
+  let rdy = Ast.gensym ~prefix:"rdy" () in
+  let idle = Ast.gensym ~prefix:"idle" () in
+  let result = Ast.gensym ~prefix:"res" () in
+  let e1_ren = renaming Ast.(pi.main) in
+  let inner = Ast.gensym ~prefix:"state" () in
+  let w,ts,s,s_star = to_s inner ~genv:pi.genv [idle] e1_ren result 
+     (seq_ (S_sig_set(rdy,A_const (Bool true))) @@ S_continue(id,idle)) in
+  let fsm = make_fsm inner rdy result idle w ts s s_star in
+  id,rdy,result,idle,([],fsm), S_skip

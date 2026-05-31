@@ -139,6 +139,7 @@ type token =
   | AND
   | AMP_AMP
   | AMP
+  | ABORT
 
 (* This exception is raised by the monolithic API functions. *)
 

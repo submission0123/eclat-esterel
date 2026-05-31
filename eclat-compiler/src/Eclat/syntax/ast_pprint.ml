@@ -298,6 +298,7 @@ let pp_exp (fmt:fmt) (e:e) : unit =
       parenthesize ~paren (fun fmt () ->
         fprintf fmt "assert %a" (pp_e ~paren:true) e1) fmt ()
   | E_await(x,_) -> fprintf fmt "await %s" x
+  | E_abort(e1,x,_) -> fprintf fmt "abort %a when %s" (pp_e ~paren:false) e1 x
   in
   fprintf fmt "@[<v 0>%a@]" (pp_e ~paren:false) e
 

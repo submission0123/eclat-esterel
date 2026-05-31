@@ -75,8 +75,6 @@ let rec flat_s s =
       s_let_bindings bs @@ S_letIn(x,a',flat_s s)
   | S_fsm(id,rdy,result,compute,ts,s) ->
       S_fsm(id,rdy,result,compute,List.map (fun (x,s) -> x,flat_s s) ts, flat_s s)
-  | S_in_fsm(id,s) ->
-      S_in_fsm(id,flat_s s)
   | S_call(op,a) ->
       let bs,a' = flat a in
       s_let_bindings bs @@ S_call(op,a')

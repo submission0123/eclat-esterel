@@ -173,6 +173,7 @@ rule token = parse
 | "^"                 { HAT }
 | "loop:"             { LOOP }
 | "await:"            { AWAIT }
+| "abort:"            { ABORT }
 | ['"']([^'"']* as s)['"'] { STRING_LIT s }
 | ['\r']['\n'] | ['\n']| ['\r'] { (Lexing.new_line lexbuf) ; (token lexbuf) }
 | [' ' '\t']          { token lexbuf }

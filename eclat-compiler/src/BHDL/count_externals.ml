@@ -34,8 +34,6 @@ let rec count_s s =
       count_s s
   | S_fsm(id,rdy,result,compute,ts,s) ->
       List.iter (fun (_,s) -> count_s s) ts; count_s s
-  | S_in_fsm(id,s) ->
-      count_s s
   | S_call _ ->
       ()
   | S_external_run(f,l,_,_,_) ->

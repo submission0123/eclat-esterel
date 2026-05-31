@@ -1,0 +1,9 @@
+module ABCRO:
+  input A, B, C, R;
+  output O;
+  signal AB in
+     run ABRO [ signal AB / O ]
+  ||
+     run ABRO [ signal AB / A, C / B ]
+  end
+end module

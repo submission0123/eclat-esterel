@@ -18,7 +18,9 @@ let rec find env e =
   | E_pause _ -> 1
   | E_suspend(_,e1,_) -> find env e1
   | E_await _ -> 1
-  | E_get _ | E_set _ -> 1
+  | E_abort(e1,_,_) -> min (find env e1) 1
+  | E_get _ | E_set _ -> 0
+  | E_array_get _ | E_array_set _ -> 1
   | _ -> 0
 
 and surface e =

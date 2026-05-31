@@ -34,7 +34,7 @@ let compile ?(vhdl_comment="") ?(prop_fsm=true) arg_list name ty fmt pi =
     then Causality_esterel.main pi.main;
 
   let (id,rdy,result,idle,fsm,_) = 
-    Gen_BHDL.main (Ast.gensym()) ~is_zero:(not @@ !Typing.relax_flag) pi in
+    Gen_BHDL.main pi in
   Count_externals.count_externals_fsm fsm;
 
   let statics = pi.genv.statics |> List.filter (function 

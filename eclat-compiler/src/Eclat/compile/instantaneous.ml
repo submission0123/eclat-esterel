@@ -80,7 +80,8 @@ let rec combinational ?(with_sig_get=true) ~externals (e:e) : bool =
   | E_exit _ 
   | E_suspend _ 
   | E_assert _ 
-  | E_await _ -> false
+  | E_await _
+  | E_abort _ -> false
 (* same as combinational, but may contain cas/match, registers or even exec blocks *)
 
 let rec instantaneous ?(with_sig=true) ~externals (e:e) : bool =
@@ -155,3 +156,4 @@ let rec instantaneous ?(with_sig=true) ~externals (e:e) : bool =
   | E_suspend(_,e1,_) -> instantaneous ~externals e1
   | E_assert(e1,_) -> instantaneous ~externals e1
   | E_await _ -> false
+  | E_abort(e1,_,_) -> instantaneous ~externals e1

@@ -88,6 +88,7 @@ let rename_e ~statics e =
   | E_trap(tyB,l) -> E_trap(tyB,rename_ident ~statics l)
   | E_suspend(l,e1,x) -> E_suspend(rename_ident ~statics l,ren_e e1,x)
   | E_await(x,l) -> E_await(x,rename_ident ~statics l)
+  | E_abort(e1,x,l) -> E_abort(ren_e e1,x,rename_ident ~statics l)
   | e -> Ast_mapper.map ren_e e
   in
   ren_e e

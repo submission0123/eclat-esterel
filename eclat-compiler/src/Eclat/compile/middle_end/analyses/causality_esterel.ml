@@ -1,9 +1,12 @@
+(* assume the program is previously normalized *)
+
 (* after chapter 7 of : https://www-sop.inria.fr/members/Gerard.Berry/Papers/EsterelConstructiveBook.pdf *)
 type x = string
 type partial_event = (x * char) list
 
 module S = Map.Make(String)
-module K = Map.Make(Int)
+type k = Nothing | Pause | Exit of x 
+module K = Map.Make(struct type t = k let compare = Stdlib.compare end)
 
 (* For Must, the set K is
 either empty, if we cannot derive any Must information, or a singleton {k},
@@ -35,19 +38,29 @@ the potential completion set K(p) defined in Section 6.6.  *)
 
 type sigv = Unknown | Known of Ast.c
 
+let causality_error ?(msg="")() = 
+  Prelude.Errors.error (fun fmt -> Format.fprintf fmt "causality error%s" msg)
+
 let bot = '0' ;;
-let s_union = S.union (fun x v1 v2 -> if v1 = v2 then Some (v1) else Some Unknown)
+let s_union = S.union (fun x v1 v2 -> match v1,v2 with 
+                                      | Known c1, Known c2 -> if c1 = c2 then Some v1 else causality_error()
+                                      | Unknown, Known _ -> Some(v2)
+                                      | Known _, Unknown -> Some (v1)
+                                      | Unknown,Unknown -> Some Unknown)
 let s_inter s1 s2 = S.filter (fun x _ -> S.mem x s2) s1
 let k_union = K.union (fun x () () -> Some ())
 let sk_union (s1,k1) (s2,k2) = 
   s_union s1 s2, k_union k1 k2
+
+let sk_remove_k (s,k) n = (s,K.remove n k)  
+
 
 let s_find x s = 
   match S.find_opt x s with
   | None -> bot
   | Some x -> x
 
-let max_set k k' =
+let max_set k k' = (* traps must be ordered *)
   K.fold
     (fun x () acc ->
       K.fold
@@ -60,23 +73,24 @@ let max_set k k' =
 
 open Ast
 
-let causality_error () = 
-  Prelude.Errors.error (fun fmt -> Format.fprintf fmt "causality error")
+
 
 
 let remove_in_sk x (s,k) =
-  S.iter (fun x v ->
-         if v = Unknown then causality_error ()) s;
+  (* S.iter (fun x v ->
+         if v = Unknown then causality_error ~msg:"(remove_in_sk)" ()) s; *)
   S.remove x s, k
 
 let rec must e pevent : sigv S.t * _ =
   match e with
   | E_const _ | Ast.E_sig_get _
-  | E_app _ (* assume a combinational function *) -> (S.empty,K.singleton 0 ())
-  | E_pause _ -> (S.empty,K.singleton 1 ())
-  | E_exit _ ->  (S.empty,K.singleton 2 ())
-  | E_emit(s,E_const c) -> (S.singleton s (Known c),K.singleton 0 ())
-  | E_emit(s,_) -> (S.singleton s Unknown,K.singleton 0 ())
+  | E_app _ (* assume a combinational function *) -> (S.empty,K.singleton Nothing ())
+  | E_pause _ -> (S.empty,K.singleton Pause ())
+  | E_exit(x,_) -> (S.empty,K.singleton (Exit x) ())
+  | E_emit(s,E_const (Bool false)) -> (S.empty,K.singleton Nothing ()) 
+       (** ``emit s(false)'' means ``s is not emitted'' **)
+  | E_emit(s,E_const c) -> (S.singleton s (Known c),K.singleton Nothing ())
+  | E_emit(s,_) -> (S.singleton s Unknown,K.singleton Nothing ())
   | E_if(E_sig_get(s),e1,e2) ->
        (match s_find s pevent with
        | '+' -> must e1 pevent
@@ -93,9 +107,10 @@ let rec must e pevent : sigv S.t * _ =
       (* toto shift *)
       must e2 pevent
   | E_letIn(p,_,e1,e2) ->
-      let k = must_k e1 pevent in
-      if not(K.mem 0 k) then must e1 pevent else
-      (s_union (must_s e1 pevent) (must_s e2 pevent), must_k e2 pevent)
+      let (s,k) = must e1 pevent in
+      if not(K.mem Nothing k) then (s,k) else
+      let (s',k') = must e2 pevent in
+      (s_union s s', k')
   | E_loop(e1) -> must e1 pevent
   | E_par(l,[e1;e2]) ->
       s_union (must_s e1 pevent) (must_s e2 pevent),
@@ -108,13 +123,14 @@ let rec must e pevent : sigv S.t * _ =
         (S.empty,k_union k1 k2)
       else Prelude.Errors.error (fun fmt -> Format.fprintf fmt "the program is rejected because may not respect causality@,")
   | E_exec(e1,e0,eo,_) ->
-      let (s1,k1) = must e1 pevent in
-      let (s2,k2) = must e0 pevent in
-      let (s3,k3) = match eo with 
-                    | None -> (S.empty,K.empty)
-                    | Some e2 -> must e2 pevent in
-      (s_union s1 (s_union s2 s3),k_union k1 (k_union k2 k3))
-  | e -> Ast_pprint.pp_exp Format.std_formatter e; assert false
+      (* assume e0 and eo are atoms *)
+      must e1 pevent
+  | E_array_get _ 
+  | E_array_set _ -> (S.empty,K.singleton Pause ())
+  | e -> (S.empty,K.singleton Nothing ())
+     (*Ast_pprint.pp_exp Format.std_formatter e; assert false*)
+
+
 
 (* trap & shift *)
 and must_s e pevent = 
@@ -128,18 +144,17 @@ and can_m_k m e pevent =
 and can_m m e pevent : sigv S.t * _ =
   match e with
   | E_const _ | Ast.E_sig_get _
-  | E_app _ (* assume a combinational function *) -> (S.empty,K.singleton 0 ())
-  | E_pause _ -> (S.empty,K.singleton 1 ())
-  | E_exit _ ->  (S.empty,K.singleton 2 ())
-  | E_emit(s,E_const c) -> (S.singleton s (Known c),K.singleton 0 ())
-  | E_emit(s,_) -> (S.singleton s Unknown,K.singleton 0 ())
+  | E_app _ (* assume a combinational function *) -> (S.empty,K.singleton Nothing ())
+  | E_pause _ -> (S.empty,K.singleton Pause ())
+  | E_exit(x,_) ->  (S.empty,K.singleton (Exit x) ())
+  | E_emit(s,E_const c) -> (S.singleton s (Known c),K.singleton Nothing ())
+  | E_emit(s,_) -> (S.singleton s Unknown,K.singleton Nothing ())
   | E_if(E_sig_get(s),e1,e2) ->
        (match s_find s pevent with
        | '+' -> can_m m e1 pevent
        | '-' -> can_m m e2 pevent
-       | _ -> let (s1,k1) = can_m bot e1 pevent in
-              let (s2,k2) = can_m bot e2 pevent in
-              (s_union s1 s2,k_union k1 k2))
+       | _ -> sk_union (can_m bot e1 pevent)
+                       (can_m bot e2 pevent))
   | E_suspend(l,e1,x) -> can_m m e1 pevent
   | E_letIn(P_var s,_,E_sig_create _, e1) -> 
      if m = '+' && (let sset = must_s e1 (SMap.add s bot pevent) in S.mem s sset)
@@ -152,41 +167,52 @@ and can_m m e pevent : sigv S.t * _ =
       (* toto shift *)
       can_m m e2 pevent
   | E_letIn(p,_,e1,e2) ->
-      let k = can_m_k m e1 pevent in
-      if not(K.mem 0 k) then can_m m e1 pevent else
-      let m' = if m = '+' && (let mk = must_k e1 pevent in K.mem 0 mk) then '+' else bot in
-      s_union (can_m_s m e1 pevent) (can_m_s m' e2 pevent),
-      k_union (K.remove 0 @@ can_m_k m e1 pevent) (can_m_k m' e2 pevent)
+      let (s,k) = can_m m e1 pevent in
+      if not(K.mem Nothing k) then (s,k) else
+      let m' = if m = '+' && (let mk = must_k e1 pevent in K.mem Nothing mk) then '+' else bot in
+      (sk_union (s, K.remove Nothing k) (can_m m' e2 pevent))
   | E_loop(e1) -> can_m m e1 pevent 
   | E_par(l,[e1;e2]) ->
       s_union (can_m_s m e1 pevent) (can_m_s m e2 pevent),
       max_set (can_m_k m e1 pevent) (can_m_k m e2 pevent)
   | E_if(_,e1,e2) ->
-      let (s1,k1) = can_m bot e1 pevent in
-      let (s2,k2) = can_m bot e2 pevent in
-      (s_union s1 s2,k_union k1 k2)
+      sk_union (can_m bot e1 pevent)
+               (can_m bot e2 pevent)
   | E_exec(e1,e0,eo,_) ->
-      let (s1,k1) = can_m bot e1 pevent in
-      let (s2,k2) = can_m bot e0 pevent in
-      let (s3,k3) = match eo with 
-                    | None -> (S.empty,K.empty)
-                    | Some e2 -> can_m bot e2 pevent in
-      (s_union s1 (s_union s2 s3),k_union k1 (k_union k2 k3))
-  | e -> Ast_pprint.pp_exp Format.std_formatter e; assert false
+      (* assume e0 and eo are atoms *)
+      can_m m e1 pevent
+  | E_array_get _
+  | E_array_set _ -> (S.empty,K.singleton Pause ())
+  | e -> (S.empty,K.singleton Nothing ())
+  (* | e -> Ast_pprint.pp_exp Format.std_formatter e; assert false*)
+
 
 let print ~msg (s,k) = 
   S.iter (fun x _ -> Printf.printf "%s," x) s;
   print_string msg;
   print_newline ();
-  K.iter (fun n () -> Printf.printf "%d," n) k;
+  K.iter (fun n () -> Printf.printf "%s," (match n with 
+                                          | Nothing -> "0"
+                                          | Pause -> "1"
+                                          | Exit x -> x)) k;
   print_newline ()
 
 let rec propagate = function 
   | E_letIn(P_var x, _, E_sig_get(s), e1) ->
       propagate @@ Ast_subst.subst_e x (E_sig_get(s)) e1
-  | e -> Ast_mapper.map propagate e
+  (* | E_array_get _
+  | E_array_set _ -> E_let(P_unit,T_unit, E_pause(Ast.gensym (),E_const Unit), 
+                          E_if(E_var "b", E_const Unit, E_loop(E_pause(Ast.gensym (),E_const Unit))
+  *)| e -> Ast_mapper.map propagate e
 
 let main e =
   let e = propagate e in
+  let (s',k') = can_m '+' e S.empty in
+  if K.is_empty k' then causality_error ~msg:"(no return code)"();
   let (s,k) = must e S.empty in
-  if K.is_empty k then causality_error ();;
+  let (s',k') = can_m '+' e S.empty in
+  (*if S.for_all (fun x _ -> S.mem x s') s
+  && K.for_all (fun x _ -> K.mem x k') k then () else causality_error  ~msg:"(must but cannot)" () *)
+  if S.for_all (fun x _ -> S.mem x s) s'
+  && K.for_all (fun x _ -> K.mem x k) k' then () else causality_error  ~msg:"(can but must not)" ();;
+

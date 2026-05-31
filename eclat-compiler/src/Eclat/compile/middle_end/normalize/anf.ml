@@ -244,6 +244,8 @@ let rec anf (e:e) : e =
         E_assert(xc,loc)
   | E_await _ as ea ->
       ea
+  | E_abort(e1,x,l) ->
+      E_abort(anf e1,x,l)
   in 
   glob e ;;
 
