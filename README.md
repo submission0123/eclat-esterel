@@ -101,7 +101,7 @@ The main files involved in our extension are:
 * [eclat-compiler/src/Eclat/typing/types.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/typing/types.ml)   (defining types `trap`, `'a signal` and `'a ref`)
 * [eclat-compiler/src/Eclat/typing/typing.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/typing/typing.ml)  (typing rules for `Esterel` constructs)
 * [eclat-compiler/src/Eclat/compile/backend/gen_BHDL.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/backend/gen_BHDL.ml)          (compilation to BHDL)
-* [eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml)        (causality analysis - ongoing work)
+* [eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/middle_end/analyses/causality_esterel.ml)        (causality analysis)
 * [eclat-compiler/src/Eclat/compile/middle_end/analyses/check_pauses_loop.ml](https://github.com/submission0123/eclat-esterel/tree/main/eclat-compiler/src/Eclat/compile/middle_end/analyses/check_pauses_loop.ml)    (detecting instantaneous loop)
 * [eclat-compiler/src/BHDL/BHDL_syntax.ml](https://github.com/submission0123/eclat-esterel/blob/main/eclat-compiler/src/BHDL/BHDL_syntax.ml)    (target language)
 
